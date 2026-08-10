@@ -5,6 +5,7 @@ import { HomePanel } from './components/HomePanel';
 import { VacationPanel } from './components/VacationPanel';
 import { SummaryPanel } from './components/SummaryPanel';
 import { SettingsPanel } from './components/SettingsPanel';
+import { WidgetPanel } from './components/WidgetPanel';
 import { computeDay } from './lib/events';
 import { DAY_MS, formatClockSeconds, toDateKey } from './lib/time';
 import { StatusChip } from './components/ui';
@@ -24,7 +25,16 @@ const DRAIN_INTERVAL_MS = 60_000;
 /** 창으로 돌아올 때마다 Notion 을 읽지 않도록 두는 최소 간격 */
 const PULL_THROTTLE_MS = 20_000;
 
-export default function App() {
+/**
+ * 위젯 모드에서 다른 기기 기록을 확인하는 주기.
+ *
+ * 임베드된 위젯은 Notion 페이지에 하루 종일 떠 있어서 focus/visibilitychange 가
+ * 거의 발생하지 않는다. 그 상태로는 데스크탑에서 찍은 퇴근이 노트북 위젯에
+ * 영영 안 보이므로, 위젯일 때만 주기적으로 읽는다.
+ */
+const WIDGET_PULL_INTERVAL_MS = 120_000;
+
+export default function App({ widget = false }: { widget?: boolean }) {
   const store = useStore();
   const { state, runtime } = useSnapshot();
   const now = useNow(1000);
@@ -64,6 +74,15 @@ export default function App() {
     };
   }, [store]);
 
+  useEffect(() => {
+    if (!widget) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      void store.pullDay(store.activeDate);
+    }, WIDGET_PULL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [store, widget]);
+
   // 실패한 동기화를 주기적으로/온라인 복귀 시 재시도한다.
   useEffect(() => {
     if (!state.notion.autoSync) return;
@@ -85,6 +104,17 @@ export default function App() {
       ? `${formatHHMM(todayTotals.actualMs)} · 근무시간 관리`
       : '근무시간 관리';
   }, [todayTotals.isLive, Math.floor(todayTotals.actualMs / 60000)]);
+
+  // Notion Embed 용 컴팩트 화면. 조작부만 남기고 탭/집계는 전체 화면에 맡긴다.
+  if (widget) {
+    return (
+      <div className="app app--widget">
+        <WidgetPanel now={now} />
+        <Toast />
+        <AutoDismiss />
+      </div>
+    );
+  }
 
   return (
     <div className="app">
@@ -128,26 +158,30 @@ export default function App() {
         {tab === 'settings' && <SettingsPanel />}
       </main>
 
-      {runtime.notice && (
-        <div
-          className={`toast toast--${runtime.notice.kind}`}
-          role="status"
-          data-testid="toast"
-          key={runtime.notice.id}
-        >
-          <span>{runtime.notice.text}</span>
-          <button
-            type="button"
-            className="toast__close"
-            aria-label="알림 닫기"
-            onClick={() => store.dismissNotice()}
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      <Toast />
 
       <AutoDismiss />
+    </div>
+  );
+}
+
+function Toast() {
+  const store = useStore();
+  const { runtime } = useSnapshot();
+  const notice = runtime.notice;
+  if (!notice) return null;
+
+  return (
+    <div className={`toast toast--${notice.kind}`} role="status" data-testid="toast" key={notice.id}>
+      <span>{notice.text}</span>
+      <button
+        type="button"
+        className="toast__close"
+        aria-label="알림 닫기"
+        onClick={() => store.dismissNotice()}
+      >
+        ✕
+      </button>
     </div>
   );
 }

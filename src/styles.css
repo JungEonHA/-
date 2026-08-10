@@ -78,6 +78,41 @@
   }
 }
 
+/* `?theme=dark` 로 강제하는 경우.
+   Notion 의 테마는 OS 테마와 따로 놀 수 있어서 (다크 Notion + 라이트 OS),
+   임베드 위젯이 페이지와 정반대 색으로 뜨는 일이 있다. 그때 URL 로 맞춘다.
+   위 미디어쿼리와 값이 같아야 하므로 함께 고칠 것. */
+:root[data-theme='dark'] {
+  --bg: #14161d;
+  --surface: #1c1f29;
+  --surface-sunken: #23273381;
+  --border: #2b2f3d;
+  --border-strong: #3a4054;
+
+  --text: #eef0f6;
+  --text-secondary: #a7adc0;
+  --text-muted: #7d8398;
+
+  --primary: #5b81ff;
+  --primary-strong: #7295ff;
+  --primary-soft: #202741;
+  --primary-contrast: #ffffff;
+
+  --success: #4ade80;
+  --success-soft: #16281d;
+  --warn: #f5b95b;
+  --warn-soft: #2c2416;
+  --danger: #ff8080;
+  --danger-soft: #2e1b1b;
+  --danger-solid: #d93a40;
+
+  --away: #a48cff;
+  --away-soft: #241f3d;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+  --shadow-float: 0 6px 20px rgba(47, 92, 255, 0.35);
+}
+
 * { box-sizing: border-box; }
 
 html, body, #root { height: 100%; }
@@ -627,6 +662,136 @@ button { font-family: inherit; }
     border-radius: 999px;
   }
   .nav__item[aria-current='page'] { background: var(--primary-soft); }
+}
+
+/* ==========================================================================
+   Notion Embed 위젯
+   임베드 블록은 높이가 정해져 있고 사용자가 드래그로 줄인다. 240px 정도에서
+   버튼까지 다 보이도록 짜고, 더 낮아지면 아래부터 잘리도록 순서를 잡았다
+   (시간 -> 조작 버튼 -> 부가 정보 순으로 중요하다).
+   ========================================================================== */
+
+/* 노션 페이지 위에 "카드 한 장"으로 올라앉게 한다. 배경을 투명하게 두면
+   OS 테마와 노션 테마가 어긋났을 때 글자가 안 보이므로 항상 스스로 칠한다. */
+:root[data-view='widget'] body { background: var(--surface); }
+
+/* 노션의 전체 폭 임베드는 1400px 도 넘는다. 카드를 그만큼 늘리면 숫자 사이가
+   벌어져 읽기 어려우므로 폭만 가운데로 묶고 배경은 프레임 전체를 채운다. */
+.app--widget {
+  max-width: 560px;
+  padding: 12px 14px;
+  background: var(--surface);
+}
+
+.widget { display: flex; flex-direction: column; gap: 9px; flex: 1; min-height: 0; }
+
+.widget__head { display: flex; align-items: center; gap: 8px; }
+
+.widget__who {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+
+.widget__day { font-size: 12px; font-weight: 700; color: var(--text-muted); white-space: nowrap; }
+
+.widget__timer {
+  font-family: var(--font-num);
+  font-size: clamp(32px, 10vw, 44px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.widget__timer--live { color: var(--primary); }
+.widget__timer--away { color: var(--away); }
+
+.widget__meta { display: flex; gap: 6px; }
+
+.widget__metaItem {
+  flex: 1 1 0;
+  min-width: 0;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+  padding: 7px 4px;
+  text-align: center;
+}
+.widget__metaItem--accent { background: var(--primary-soft); }
+.widget__metaItem--accent .widget__metaValue { color: var(--primary); }
+
+.widget__metaLabel {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.widget__metaValue {
+  margin-top: 2px;
+  font-size: clamp(11.5px, 3vw, 14px);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.widget__alert {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+.widget__alert--warn { background: var(--warn-soft); color: var(--warn); }
+.widget__alert--danger { background: var(--danger-soft); color: var(--danger); }
+
+.widget__hint { margin: 0; font-size: 11px; color: var(--text-muted); line-height: 1.45; }
+
+.widget__foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.widget__link {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  color: var(--primary);
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.widget__link:hover { text-decoration: underline; }
+
+.widget__label {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-bottom: -4px;
+}
+
+.widget--setup .input, .widget--setup .select { padding: 8px 10px; font-size: 13px; }
+
+/* 위젯 안에서는 토스트가 프레임을 넘어갈 수 없으므로 바닥에 붙인다 */
+:root[data-view='widget'] .toast {
+  bottom: 10px;
+  max-width: calc(100% - 20px);
+  font-size: 12px;
+  padding: 9px 12px;
 }
 
 /* 화면 낭독기 전용 */

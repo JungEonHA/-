@@ -314,6 +314,35 @@ export class AppStore {
     this.notify('success', next ? `이 기기의 직원을 "${next}" 로 설정했습니다.` : '직원 설정을 지웠습니다.');
   }
 
+  /**
+   * URL 이 지정한 설정을 반영한다 (Notion Embed 위젯용).
+   *
+   * 저장된 값보다 URL 을 우선한다. 임베드 블록의 주소가 곧 "이 위젯은 누구 것인가"의
+   * 선언이기 때문이다 — 저장소가 비어 있든 남의 이름이 들어 있든 블록이 말하는
+   * 사람으로 맞춘다. 지정하지 않은 항목(null)은 건드리지 않는다.
+   *
+   * @returns 실제로 바뀐 것이 있으면 true
+   */
+  applyBootParams(params: { employeeName: string | null; accessKey: string | null }): boolean {
+    const n = this.snapshot.state.notion;
+    const nextKey = params.accessKey;
+    const nextName = params.employeeName?.trim() ?? null;
+    const keyChanged = nextKey !== null && nextKey !== n.accessKey;
+    const nameChanged = nextName !== null && nextName !== n.employeeName;
+    if (!keyChanged && !nameChanged) return false;
+
+    this.setState((s) => ({
+      ...s,
+      notion: {
+        ...s.notion,
+        ...(keyChanged ? { accessKey: nextKey } : {}),
+        // 사람이 바뀌면 이전 사람의 Notion 행을 계속 갱신하면 안 된다.
+        ...(nameChanged ? { employeeName: nextName, pageIds: {} } : {}),
+      },
+    }));
+    return true;
+  }
+
   setMappingField(field: LogicalFieldKey, propertyName: string | null) {
     this.setState((s) => {
       const mapping = { ...s.notion.mapping };

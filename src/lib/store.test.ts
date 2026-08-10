@@ -859,3 +859,74 @@ describe('데스크탑 ↔ 노트북 연동', () => {
     expect(park.store.logFor(DAY).events).toHaveLength(0);
   });
 });
+
+describe('Notion Embed 위젯의 URL 설정', () => {
+  it('URL 이 지정한 이름과 접근 키를 반영한다', () => {
+    const store = new AppStore(() => t(9), memoryStore());
+    expect(store.applyBootParams({ employeeName: '박진규', accessKey: 'k1' })).toBe(true);
+
+    const { notion } = store.getSnapshot().state;
+    expect(notion.employeeName).toBe('박진규');
+    expect(notion.accessKey).toBe('k1');
+  });
+
+  it('저장된 값보다 URL 을 우선한다 — 블록 주소가 곧 "누구의 위젯인가"이므로', () => {
+    const kv = memoryStore();
+    const first = new AppStore(() => t(9), kv);
+    first.setEmployeeName('정어리');
+
+    const second = new AppStore(() => t(9), kv);
+    second.applyBootParams({ employeeName: '박진규', accessKey: null });
+    expect(second.getSnapshot().state.notion.employeeName).toBe('박진규');
+
+    // 재시작해도 유지된다
+    expect(new AppStore(() => t(10), kv).getSnapshot().state.notion.employeeName).toBe('박진규');
+  });
+
+  it('사람이 바뀌면 이전 사람의 pageId 캐시를 버린다', () => {
+    const kv = memoryStore();
+    const first = new AppStore(() => t(9), kv);
+    first.setEmployeeName('정어리');
+    first.updateNotionSettings({ pageIds: { [DAY]: 'page-of-jeongeori' } });
+
+    const second = new AppStore(() => t(9), kv);
+    second.applyBootParams({ employeeName: '박진규', accessKey: null });
+    expect(second.getSnapshot().state.notion.pageIds).toEqual({});
+  });
+
+  it('같은 사람이면 pageId 캐시를 유지한다 (매번 행을 다시 찾지 않도록)', () => {
+    const kv = memoryStore();
+    const first = new AppStore(() => t(9), kv);
+    first.setEmployeeName('박진규');
+    first.updateNotionSettings({ pageIds: { [DAY]: 'page-1' } });
+
+    const second = new AppStore(() => t(9), kv);
+    expect(second.applyBootParams({ employeeName: '박진규', accessKey: null })).toBe(false);
+    expect(second.getSnapshot().state.notion.pageIds).toEqual({ [DAY]: 'page-1' });
+  });
+
+  it('URL 이 지정하지 않은 항목은 건드리지 않는다', () => {
+    const kv = memoryStore();
+    const first = new AppStore(() => t(9), kv);
+    first.setEmployeeName('정어리');
+    first.updateNotionSettings({ accessKey: 'stored-key' });
+
+    const second = new AppStore(() => t(9), kv);
+    expect(second.applyBootParams({ employeeName: null, accessKey: null })).toBe(false);
+
+    const { notion } = second.getSnapshot().state;
+    expect(notion.employeeName).toBe('정어리');
+    expect(notion.accessKey).toBe('stored-key');
+  });
+
+  it('위젯이 URL 로 설정한 이름으로 Notion 에 기록한다', async () => {
+    const kv = memoryStore();
+    const ready = await makeReadyStore(mock, kv);
+    ready.store.applyBootParams({ employeeName: '박진규', accessKey: null });
+
+    ready.store.perform('clock_in');
+    await ready.store.drainOutbox({ force: true });
+
+    expect(ready.store.getSnapshot().state.lastSync?.employeeName).toBe('박진규');
+  });
+});
