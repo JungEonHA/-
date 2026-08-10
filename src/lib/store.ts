@@ -134,6 +134,23 @@ export class AppStore {
         syncBlocked: null,
       },
     };
+
+    this.watchOtherTabs();
+  }
+
+  /**
+   * 다른 탭이 저장소를 갱신하면 이 탭도 즉시 따라간다.
+   *
+   * `storage` 이벤트는 **다른** 탭에서만 발생하므로 자기 저장에는 반응하지 않는다.
+   * 이게 없으면 여러 탭을 띄워 둔 사용자가 탭마다 서로 다른 근무시간을 보게 된다.
+   */
+  private watchOtherTabs() {
+    if (typeof window === 'undefined' || !this.store.persistent) return;
+    window.addEventListener('storage', (e) => {
+      if (e.key !== null && e.key !== STORAGE_KEY) return;
+      this.snapshot = { ...this.snapshot, state: this.latestState() };
+      this.emit();
+    });
   }
 
   // -- React 연동 --------------------------------------------------------
@@ -148,8 +165,24 @@ export class AppStore {
     for (const l of this.listeners) l();
   }
 
+  /**
+   * 저장소에 실제로 들어 있는 최신 상태. 읽지 못하면 메모리 상태로 물러난다.
+   *
+   * 같은 브라우저에서 앱을 여러 탭에 띄우면 탭마다 "페이지를 연 시점"의 스냅샷을
+   * 메모리에 들고 있다. 낡은 탭이 무엇이든 한 번 저장하는 순간 그 스냅샷이 통째로
+   * 최신 기록을 덮어쓴다 — 실제로 이 경로로 하루치 이벤트와 매핑이 전부 날아갔다.
+   * 그래서 쓰기는 언제나 "지금 저장소에 있는 값" 위에서 한다.
+   */
+  private latestState(): AppState {
+    try {
+      return backfillMapping(loadState(this.store, this.now()));
+    } catch {
+      return this.snapshot.state;
+    }
+  }
+
   private setState(updater: (s: AppState) => AppState) {
-    const next = updater(this.snapshot.state);
+    const next = updater(this.latestState());
     const result = saveState(this.store, next);
     this.snapshot = {
       state: next,

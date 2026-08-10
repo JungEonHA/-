@@ -81,7 +81,10 @@ export const FIELD_SPECS: FieldSpec[] = [
     labelKo: '출근시간',
     kind: 'timestamp',
     acceptedTypes: ['date', 'rich_text', 'title'],
-    candidates: ['출근시간', '출근', '출근시각', 'checkin', 'clockin', 'starttime', 'start'],
+    candidates: [
+      '출근시간', '출근', '출근시각', '시작', '시작시간', '시작시각',
+      'checkin', 'clockin', 'starttime', 'start',
+    ],
     createAs: 'rich_text',
     required: false,
     descriptionKo: 'date 타입이면 ISO 시각, 텍스트면 "09:00" 형태로 기록합니다.',
@@ -91,7 +94,10 @@ export const FIELD_SPECS: FieldSpec[] = [
     labelKo: '퇴근시간',
     kind: 'timestamp',
     acceptedTypes: ['date', 'rich_text', 'title'],
-    candidates: ['퇴근시간', '퇴근', '퇴근시각', 'checkout', 'clockout', 'endtime', 'end'],
+    candidates: [
+      '퇴근시간', '퇴근', '퇴근시각', '종료', '종료시간', '종료시각',
+      'checkout', 'clockout', 'endtime', 'end',
+    ],
     createAs: 'rich_text',
     required: false,
     descriptionKo: 'date 타입이면 ISO 시각, 텍스트면 "18:00" 형태로 기록합니다.',

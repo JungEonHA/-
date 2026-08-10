@@ -698,3 +698,44 @@ describe('업그레이드 시 매핑 보정', () => {
     expect(revived.getSnapshot().state.notion.mapping.status).toBe('기록명');
   });
 });
+
+describe('여러 탭을 열어 뒀을 때', () => {
+  it('낡은 탭이 저장해도 최신 기록을 덮어쓰지 않는다', async () => {
+    const kv = memoryStore();
+
+    // 낡은 탭: 출근만 한 상태에서 페이지를 열어 둔 채 방치
+    const stale = await makeReadyStore(mock, kv);
+    stale.store.perform('clock_in');
+
+    // 새 탭: 같은 브라우저에서 앱을 다시 열고 하루를 마무리
+    const fresh = new AppStore(() => t(18), kv);
+    fresh.perform('away_start');
+    fresh.perform('away_end');
+    fresh.perform('clock_out');
+    const finished = computeDay(fresh.logFor(DAY), t(19));
+    expect(finished.status).toBe('finished');
+
+    // 낡은 탭에서 아무 설정이나 건드리면(입력창 blur 등) 저장이 일어난다
+    stale.store.updateNotionSettings({ apiBase: 'https://example.com' });
+
+    // 그래도 퇴근 기록은 살아 있어야 한다
+    const after = new AppStore(() => t(19), kv);
+    expect(computeDay(after.logFor(DAY), t(19)).status).toBe('finished');
+    expect(after.getSnapshot().state.notion.apiBase).toBe('https://example.com');
+  });
+
+  it('낡은 탭이 저장해도 매핑과 pageId 가 사라지지 않는다', async () => {
+    const kv = memoryStore();
+    const stale = await makeReadyStore(mock, kv);
+
+    const fresh = new AppStore(() => t(18), kv);
+    fresh.setMappingField('status', '상태');
+    fresh.perform('clock_in');
+
+    stale.store.updateNotionSettings({ accessKey: 'k' });
+
+    const after = new AppStore(() => t(19), kv);
+    expect(after.getSnapshot().state.notion.mapping.status).toBe('상태');
+    expect(after.logFor(DAY).events).toHaveLength(1);
+  });
+});
