@@ -69,6 +69,8 @@ export interface Snapshot {
 
 const MAX_BACKOFF_MS = 5 * 60 * 1000;
 const BASE_BACKOFF_MS = 5 * 1000;
+/** 백엔드가 아예 없다고 확인된 뒤의 재확인 간격 */
+const BACKEND_RECHECK_MS = 10 * 60 * 1000;
 /** 이 횟수를 넘으면 자동 재시도를 멈추고 수동 재시도를 기다린다 (무한 호출 방지) */
 export const MAX_AUTO_ATTEMPTS = 8;
 
@@ -82,6 +84,7 @@ export class AppStore {
   private store: KeyValueStore;
   private noticeSeq = 0;
   private draining = false;
+  private lastBackendCheckAt = 0;
 
   constructor(
     private readonly now: () => number = () => Date.now(),
@@ -232,7 +235,26 @@ export class AppStore {
   }
 
   // -- 백엔드 / 스키마 ---------------------------------------------------
-  async checkBackend(): Promise<void> {
+
+  /**
+   * 백엔드 존재 여부를 확인한다.
+   *
+   * Notion 을 아직 연결하지 않은 사용자(정적 배포 / 타이머만 사용)에게는 백엔드가
+   * 영영 나타나지 않는다. 그런 상태에서 자동 확인을 계속 돌리면 실패하는 요청이
+   * 1분마다 무한히 나가므로, 'unavailable' 로 확정된 뒤에는 재확인 간격을 늘린다.
+   * 사용자가 직접 누르는 "연결 확인"은 force 로 항상 즉시 확인한다.
+   */
+  async checkBackend(opts: { force?: boolean } = {}): Promise<void> {
+    const now = this.now();
+    if (
+      !opts.force &&
+      this.backendStatus() === 'unavailable' &&
+      now - this.lastBackendCheckAt < BACKEND_RECHECK_MS
+    ) {
+      return;
+    }
+    this.lastBackendCheckAt = now;
+
     this.setRuntime({ backend: 'checking', backendError: null });
     try {
       const info = await getHealth(this.clientConfig());
@@ -328,7 +350,7 @@ export class AppStore {
     if (this.draining) return;
 
     if (this.backendStatus() !== 'ready') {
-      await this.checkBackend();
+      await this.checkBackend({ force: opts.force === true });
       if (this.backendStatus() !== 'ready') {
         if (opts.force) {
           this.notify(

@@ -100,7 +100,7 @@ export function SettingsPanel() {
       </Card>
 
       <Card
-        title="동기화 대기열"
+        title={runtime.backend === 'ready' ? '동기화 대기열' : '기록 보관함'}
         hint={
           state.lastSyncAt
             ? `마지막 성공 ${formatClockSeconds(state.lastSyncAt)}`
@@ -118,8 +118,21 @@ export function SettingsPanel() {
           </button>
         }
       >
+        {runtime.backend !== 'ready' && outbox.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <Banner kind="info">
+              Notion을 아직 연결하지 않아 {outbox.length}일치 기록이 이 기기에 보관돼 있습니다.
+              나중에 연결하면 <b>한 번에 모두 기록</b>됩니다. 지금 당장 할 일은 없습니다.
+            </Banner>
+          </div>
+        )}
+
         {outbox.length === 0 ? (
-          <EmptyState>대기 중인 항목이 없습니다. 모든 기록이 Notion에 반영되었습니다.</EmptyState>
+          <EmptyState>
+            {runtime.backend === 'ready'
+              ? '대기 중인 항목이 없습니다. 모든 기록이 Notion에 반영되었습니다.'
+              : '아직 확정된 근무 기록이 없습니다. 퇴근 처리를 하면 여기에 쌓입니다.'}
+          </EmptyState>
         ) : (
           <div className="list" data-testid="outbox-list">
             {outbox.map((entry) => (
@@ -187,7 +200,7 @@ function ConnectionCard() {
           type="button"
           className="btn btn--ghost btn--sm"
           data-testid="btn-check-backend"
-          onClick={() => void store.checkBackend()}
+          onClick={() => void store.checkBackend({ force: true })}
         >
           연결 확인
         </button>
@@ -208,7 +221,7 @@ function ConnectionCard() {
           onChange={(e) => setApiBase(e.target.value)}
           onBlur={() => {
             store.updateNotionSettings({ apiBase: apiBase.trim().replace(/\/+$/, '') });
-            void store.checkBackend();
+            void store.checkBackend({ force: true });
           }}
         />
         <span className="field__hint">

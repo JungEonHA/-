@@ -63,10 +63,12 @@ function installBackend(mock: NotionMock, env: Partial<ServerEnv> = {}) {
 
 /** 백엔드가 없는 정적 배포 상황 (index.html 이 돌아온다) */
 function installNoBackend() {
-  vi.stubGlobal(
-    'fetch',
-    async () => new Response('<!doctype html><html></html>', { status: 200 }),
-  );
+  const calls = { count: 0 };
+  vi.stubGlobal('fetch', async () => {
+    calls.count += 1;
+    return new Response('<!doctype html><html></html>', { status: 200 });
+  });
+  return calls;
 }
 
 async function makeReadyStore(_mock: NotionMock, kv?: KeyValueStore) {
@@ -278,6 +280,40 @@ describe('동기화 실패 시 데이터 안전성', () => {
 
     expect(computeDay(store.logFor(DAY), t(19)).actualMs).toBe(9 * HOUR_MS);
     expect(store.getSnapshot().state.outbox[DAY]).toBeDefined();
+  });
+
+  it('백엔드가 없다고 확인되면 자동 재확인을 반복하지 않는다', async () => {
+    // Notion 을 연결하지 않고 타이머만 쓰는 사용자에게 매분 실패하는 요청이
+    // 무한히 나가면 안 된다.
+    const calls = installNoBackend();
+    let clock = t(9);
+    const store = new AppStore(() => clock, memoryStore());
+    store.updateNotionSettings({ autoSync: false });
+
+    await store.checkBackend();
+    expect(store.getSnapshot().runtime.backend).toBe('unavailable');
+    expect(calls.count).toBe(1);
+
+    store.perform('clock_in');
+    clock = t(18);
+    store.perform('clock_out');
+    expect(store.getSnapshot().state.outbox[DAY]).toBeDefined();
+
+    // 주기적 드레인(App 의 60초 타이머)이 여러 번 돌아도 요청이 늘지 않는다.
+    // 첫 호출은 재확인 간격(10분)이 지났으므로 1회만 확인한다.
+    clock = t(18);
+    for (let i = 0; i < 6; i++) await store.drainOutbox();
+    expect(calls.count).toBe(2);
+
+    // 사용자가 직접 "연결 확인"을 누르면 간격과 무관하게 즉시 확인한다
+    await store.checkBackend({ force: true });
+    expect(calls.count).toBe(3);
+
+    // 재확인 간격이 지나면 자동 확인도 다시 한 번 일어난다
+    clock = t(18) + 11 * 60 * 1000;
+    await store.drainOutbox();
+    await store.drainOutbox();
+    expect(calls.count).toBe(4);
   });
 
   it('매핑이 없으면 전송을 시도하지 않고 안내한다', async () => {

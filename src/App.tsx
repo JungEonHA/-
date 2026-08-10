@@ -28,7 +28,9 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('home');
 
   const todayTotals = computeDay(store.logFor(store.activeDate), now);
-  const pendingCount = Object.keys(state.outbox).length;
+  // Notion 을 아직 연결하지 않았다면 쌓인 기록은 "대기"가 아니라 그냥 로컬 기록이다.
+  // 연결되지 않은 상태에서 배지를 띄우면 문제가 있는 것처럼 보이므로 감춘다.
+  const pendingCount = runtime.backend === 'ready' ? Object.keys(state.outbox).length : 0;
 
   // 백엔드 존재 여부는 시작 시 한 번 확인한다.
   useEffect(() => {
