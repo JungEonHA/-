@@ -18,7 +18,7 @@ import {
   type FieldMapping,
   type FetchLike,
   type LogicalField,
-} from './_notion';
+} from './_notion.js';
 
 export interface ServerEnv {
   NOTION_TOKEN?: string;

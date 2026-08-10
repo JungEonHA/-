@@ -4,7 +4,7 @@
  * 여기서만 process.env 를 읽는다 — Notion Secret 은 브라우저 번들에 절대 포함되지 않는다.
  */
 
-import { handleApiRequest, type ApiRequest } from './_router';
+import { handleApiRequest, type ApiRequest } from './_router.js';
 
 interface NodeLikeRequest {
   method?: string;

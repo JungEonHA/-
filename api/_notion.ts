@@ -19,7 +19,7 @@ import {
   type FieldKind,
   type FieldMapping,
   type LogicalField,
-} from '../shared/fields';
+} from '../shared/fields.js';
 
 export {
   FIELD_SPECS,
@@ -27,7 +27,7 @@ export {
   type FieldKind,
   type FieldMapping,
   type LogicalField,
-} from '../shared/fields';
+} from '../shared/fields.js';
 
 export const DEFAULT_NOTION_VERSION = '2022-06-28';
 const NOTION_BASE = 'https://api.notion.com/v1';

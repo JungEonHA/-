@@ -173,6 +173,22 @@ Vercel 은 `.vercelignore` 로 걸러진 파일만 업로드한 뒤 `npm run bui
 전체 체크아웃 상태인 로컬·CI 에서는 재현되지 않으므로, `npm run verify:deploy` 가
 배포 조건을 그대로 복제해 검증하고 CI 에서도 같은 검사를 돌린다.
 
+### `api/` 를 수정할 때 — 상대 import 에 `.js` 를 붙인다
+
+```ts
+import { handleApiRequest } from './_router.js';   // ✅
+import { handleApiRequest } from './_router';      // ❌ 배포하면 함수가 죽는다
+```
+
+`package.json` 이 `"type": "module"` 이므로 서버리스 함수는 **ESM 으로 로드**된다.
+Node 의 ESM 로더는 상대 경로에 확장자를 요구하는데, TypeScript 는 작성한 경로를
+그대로 내보내므로 확장자가 없으면 컴파일·빌드는 전부 통과하고 **런타임에만**
+`ERR_MODULE_NOT_FOUND` 로 죽는다. 배포는 "성공"으로 뜨고 `/api` 만 500
+(`FUNCTION_INVOCATION_FAILED`)이 되므로 원인을 찾기 어렵다.
+
+TypeScript 는 `./_router.js` 를 `_router.ts` 로 정상 해석하므로 타입체크에 문제가 없다.
+`npm run verify:deploy` 가 함수를 실제로 ESM 으로 로드하고 호출까지 해서 이 부류를 잡는다.
+
 > 불변 조건: `tsconfig.build.json` 의 `include` 대상은 `.vercelignore` 에 들어가면 안 된다.
 > 같은 이유로 vitest 의 `test` 블록은 `vite.config.ts` 가 아니라 `vitest.config.ts` 에 둔다.
 
