@@ -168,7 +168,11 @@ export class AppStore {
     if (this.keys.main === SHARED_KEYS.main) return loadState(this.store, now, this.keys);
     const own = this.store.getItem(this.keys.main) ?? this.store.getItem(this.keys.backup);
     if (own) return loadState(this.store, now, this.keys);
-    return seedFromShared(loadState(this.store, now), now);
+
+    // 물려받은 값을 즉시 자기 칸에 적어 둔다. 그래야 다음 읽기가 이 경로를 타지 않는다.
+    const seeded = seedFromShared(loadState(this.store, now), now);
+    saveState(this.store, seeded, this.keys);
+    return seeded;
   }
 
   private watchOtherTabs() {
@@ -204,7 +208,10 @@ export class AppStore {
    */
   private latestState(): AppState {
     try {
-      return backfillMapping(loadState(this.store, this.now(), this.keys));
+      // `loadOrSeed` 를 거쳐야 한다. 아직 자기 칸이 저장된 적 없는 위젯에서
+      // 곧바로 `loadState` 를 부르면 빈 상태가 나오고, 그 위에 첫 저장이 얹히면서
+      // 물려받은 접근 키·매핑이 그대로 날아간다.
+      return backfillMapping(this.loadOrSeed(this.now()));
     } catch {
       return this.snapshot.state;
     }

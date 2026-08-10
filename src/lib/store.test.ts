@@ -1041,3 +1041,28 @@ describe('한 페이지에 위젯을 여러 개 띄웠을 때', () => {
     expect(computeDay(reopened.logFor(DAY), t(10)).status).toBe('working');
   });
 });
+
+describe('직원 칸을 처음 만들 때의 저장 순서', () => {
+  it('물려받은 연결 설정이 첫 저장에도 살아남는다', () => {
+    const kv = memoryStore();
+    const shared = new AppStore(() => t(9), kv);
+    shared.updateNotionSettings({
+      autoSync: false,
+      accessKey: 'team-key',
+      mapping: { date: '근무 일자' },
+    });
+
+    // 생성 직후의 첫 저장이 "빈 칸" 위에 얹히면 물려받은 값이 통째로 날아간다.
+    // 실제로 위젯이 접근 키를 잃고 설정 화면으로 돌아갔다.
+    const w = new AppStore(() => t(10), kv, '박진규');
+    w.applyBootParams({ employeeName: '박진규', accessKey: null });
+
+    expect(w.getSnapshot().state.notion.accessKey).toBe('team-key');
+    expect(w.getSnapshot().state.notion.mapping.date).toBe('근무 일자');
+
+    const reopened = new AppStore(() => t(11), kv, '박진규');
+    expect(reopened.getSnapshot().state.notion.accessKey).toBe('team-key');
+    expect(reopened.getSnapshot().state.notion.mapping.date).toBe('근무 일자');
+    expect(reopened.getSnapshot().state.notion.employeeName).toBe('박진규');
+  });
+});
