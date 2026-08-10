@@ -124,8 +124,23 @@ export async function handleApiRequest(req: ApiRequest, deps: RouterDeps): Promi
   }
 
   // ---- 이후 경로는 접근키 검사 ----
-  if (env.APP_ACCESS_KEY && req.headers['x-app-key'] !== env.APP_ACCESS_KEY) {
-    return json(401, { error: '접근 키가 올바르지 않습니다.', code: 'unauthorized', retryable: false }, cors);
+  //
+  // 양쪽을 trim 해서 비교한다. 대시보드에 값을 붙여넣을 때 끝에 줄바꿈이나
+  // 공백이 딸려 들어가는 일이 흔한데, 그러면 눈으로는 같은 값인데 401 이 나서
+  // 원인을 찾기가 매우 어렵다. 공백으로 시작·끝나는 공유 비밀번호는 의도된
+  // 값이 아니라고 보는 편이 안전하다.
+  const expectedKey = env.APP_ACCESS_KEY?.trim();
+  if (expectedKey && req.headers['x-app-key']?.trim() !== expectedKey) {
+    return json(
+      401,
+      {
+        error:
+          '접근 키가 올바르지 않습니다. 앱 설정의 "접근 키" 와 서버의 APP_ACCESS_KEY 가 같은지 확인하세요.',
+        code: 'unauthorized',
+        retryable: false,
+      },
+      cors,
+    );
   }
 
   if (!env.NOTION_TOKEN) {

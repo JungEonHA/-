@@ -160,7 +160,9 @@ export class AppStore {
 
   private clientConfig(): ClientConfig {
     const { apiBase, accessKey } = this.snapshot.state.notion;
-    return { apiBase, accessKey };
+    // 붙여넣기로 딸려 들어온 공백/줄바꿈 때문에 URL 이 깨지거나 접근 키가
+    // 어긋나는 일이 잦다. 저장값은 건드리지 않고 전송할 때만 다듬는다.
+    return { apiBase: apiBase.trim(), accessKey: accessKey.trim() };
   }
 
   // -- 출퇴근 액션 -------------------------------------------------------

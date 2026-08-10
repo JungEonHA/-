@@ -490,6 +490,25 @@ describe('API 라우터', () => {
     expect(allowed.status).toBe(200);
   });
 
+  it('접근 키 앞뒤 공백은 무시한다 (대시보드 붙여넣기 사고 방지)', async () => {
+    const mock = realisticMock();
+    // 환경변수 쪽에 줄바꿈이 딸려 들어간 상황
+    const env = envFor(mock, { APP_ACCESS_KEY: 's3cret\n' });
+
+    const ok = await handleApiRequest(
+      req({ method: 'GET', path: '/notion-schema', headers: { 'x-app-key': 's3cret' } }),
+      { env, fetchImpl: mock.fetchImpl },
+    );
+    expect(ok.status).toBe(200);
+
+    // 그래도 값이 다르면 여전히 막아야 한다
+    const denied = await handleApiRequest(
+      req({ method: 'GET', path: '/notion-schema', headers: { 'x-app-key': 'wrong' } }),
+      { env, fetchImpl: mock.fetchImpl },
+    );
+    expect(denied.status).toBe(401);
+  });
+
   it('NOTION_ALLOW_WRITE 가 1 이 아니면 쓰기를 막는다', async () => {
     const mock = realisticMock();
     const res = await handleApiRequest(
