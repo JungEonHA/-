@@ -8,7 +8,11 @@ import './styles.css';
 
 const boot = parseBootParams(window.location.search);
 
-const store = new AppStore();
+// URL 이 사람을 지정하면 그 사람 전용 저장 칸을 쓴다.
+//
+// 같은 Notion 페이지의 위젯 두 개는 브라우저가 보기에 같은 저장소를 공유한다.
+// 칸을 가르지 않으면 두 위젯이 서로의 이름과 기록을 덮어쓴다 — 실제로 그랬다.
+const store = new AppStore(undefined, undefined, boot.employeeName);
 // URL 이 지정한 직원/접근 키를 먼저 반영한 뒤 그린다 — 위젯이 잠깐이라도
 // 다른 사람 기록을 보여주는 일이 없도록.
 store.applyBootParams(boot);

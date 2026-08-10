@@ -17,6 +17,30 @@ import { defaultVacationConfig } from './vacation';
 export const STORAGE_KEY = 'worktime.studio.state.v1';
 export const BACKUP_KEY = 'worktime.studio.state.v1.bak';
 
+/** 이 저장소 인스턴스가 쓰는 키 한 쌍 */
+export interface StateKeys {
+  main: string;
+  backup: string;
+}
+
+export const SHARED_KEYS: StateKeys = { main: STORAGE_KEY, backup: BACKUP_KEY };
+
+/**
+ * 직원별 저장 칸의 키.
+ *
+ * 브라우저는 iframe 의 저장소를 "상위 사이트 + iframe 출처"로 나눈다. 그래서 같은
+ * Notion 페이지에 위젯을 두 개 띄우면 **둘이 같은 칸을 쓴다** — 사람마다 블록을
+ * 나눠도 이름과 기록이 서로 덮어써진다. 실제로 그렇게 됐다.
+ *
+ * URL 이 사람을 지정하면 그 사람 전용 칸으로 가른다. 이러면 한 페이지에 위젯을
+ * 몇 개를 띄우든 서로 침범하지 않는다.
+ */
+export function keysFor(namespace: string | null): StateKeys {
+  const name = namespace?.trim();
+  if (!name) return SHARED_KEYS;
+  return { main: `${STORAGE_KEY}::${name}`, backup: `${BACKUP_KEY}::${name}` };
+}
+
 export interface NotionPropertyInfoLite {
   id: string;
   name: string;
@@ -246,8 +270,12 @@ export function normalizeState(raw: unknown, now: number): AppState {
   };
 }
 
-export function loadState(store: KeyValueStore, now: number): AppState {
-  for (const key of [STORAGE_KEY, BACKUP_KEY]) {
+export function loadState(
+  store: KeyValueStore,
+  now: number,
+  keys: StateKeys = SHARED_KEYS,
+): AppState {
+  for (const key of [keys.main, keys.backup]) {
     const raw = store.getItem(key);
     if (!raw) continue;
     try {
@@ -259,15 +287,42 @@ export function loadState(store: KeyValueStore, now: number): AppState {
   return createInitialState(now);
 }
 
-export function saveState(store: KeyValueStore, state: AppState): { ok: boolean; error?: string } {
+export function saveState(
+  store: KeyValueStore,
+  state: AppState,
+  keys: StateKeys = SHARED_KEYS,
+): { ok: boolean; error?: string } {
   try {
     const serialized = JSON.stringify(state);
-    const previous = store.getItem(STORAGE_KEY);
-    store.setItem(STORAGE_KEY, serialized);
+    const previous = store.getItem(keys.main);
+    store.setItem(keys.main, serialized);
     // 새 값이 성공적으로 쓰인 뒤에만 백업을 갱신한다.
-    if (previous) store.setItem(BACKUP_KEY, previous);
+    if (previous) store.setItem(keys.backup, previous);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
+}
+
+/**
+ * 직원 칸을 처음 만들 때 공용 칸에서 물려받을 것만 추린다.
+ *
+ * 접근 키·매핑·스키마·휴가 정책은 "이 브라우저가 어느 Notion DB 를 보는가"에 대한
+ * 것이라 사람이 달라도 같다. 반면 이름·기록·대기열·pageId 는 사람의 것이므로 비운다.
+ * 이게 없으면 위젯을 하나 걸 때마다 접근 키부터 다시 넣어야 한다.
+ */
+export function seedFromShared(base: AppState, now: number): AppState {
+  const fresh = createInitialState(now);
+  return {
+    ...fresh,
+    vacation: base.vacation,
+    notion: {
+      ...fresh.notion,
+      autoSync: base.notion.autoSync,
+      apiBase: base.notion.apiBase,
+      accessKey: base.notion.accessKey,
+      mapping: { ...base.notion.mapping },
+      schema: base.notion.schema,
+    },
+  };
 }

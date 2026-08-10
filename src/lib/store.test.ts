@@ -930,3 +930,114 @@ describe('Notion Embed 위젯의 URL 설정', () => {
     expect(ready.store.getSnapshot().state.lastSync?.employeeName).toBe('박진규');
   });
 });
+
+describe('한 페이지에 위젯을 여러 개 띄웠을 때', () => {
+  /**
+   * 브라우저는 iframe 저장소를 "상위 사이트 + iframe 출처"로 나눈다. 같은 Notion
+   * 페이지의 두 위젯은 그 둘이 똑같아서 **한 칸을 공유한다**. 실제로 하정언 위젯과
+   * 박진규 위젯이 서로의 이름과 근무시간을 덮어썼다. 그래서 같은 KeyValueStore 를
+   * 공유시켜 재현한다.
+   */
+  function widget(name: string, hour: number, kv: KeyValueStore) {
+    const store = new AppStore(() => t(hour), kv, name);
+    store.updateNotionSettings({ autoSync: false });
+    store.applyBootParams({ employeeName: name, accessKey: null });
+    return store;
+  }
+
+  it('서로의 이름을 덮어쓰지 않는다', () => {
+    const kv = memoryStore();
+    widget('하정언', 9, kv);
+    widget('박진규', 9, kv);
+
+    // 새로고침해도 각자 자기 이름이어야 한다
+    expect(new AppStore(() => t(10), kv, '하정언').getSnapshot().state.notion.employeeName).toBe(
+      '하정언',
+    );
+    expect(new AppStore(() => t(10), kv, '박진규').getSnapshot().state.notion.employeeName).toBe(
+      '박진규',
+    );
+  });
+
+  it('서로의 근무시간을 덮어쓰지 않는다', () => {
+    const kv = memoryStore();
+    const a = widget('하정언', 9, kv);
+    const b = widget('박진규', 9, kv);
+
+    a.perform('clock_in');
+    b.perform('clock_in');
+    b.perform('clock_out');
+
+    expect(computeDay(a.logFor(DAY), t(18)).status).toBe('working');
+    expect(computeDay(b.logFor(DAY), t(18)).status).toBe('finished');
+
+    const aAfter = new AppStore(() => t(18), kv, '하정언');
+    const bAfter = new AppStore(() => t(18), kv, '박진규');
+    expect(computeDay(aAfter.logFor(DAY), t(18)).status).toBe('working');
+    expect(computeDay(bAfter.logFor(DAY), t(18)).status).toBe('finished');
+  });
+
+  it('한쪽이 저장해도 다른 쪽 pageId 캐시가 섞이지 않는다', () => {
+    const kv = memoryStore();
+    const a = widget('하정언', 9, kv);
+    const b = widget('박진규', 9, kv);
+
+    a.updateNotionSettings({ pageIds: { [DAY]: 'page-a' } });
+    b.updateNotionSettings({ pageIds: { [DAY]: 'page-b' } });
+
+    expect(new AppStore(() => t(10), kv, '하정언').getSnapshot().state.notion.pageIds).toEqual({
+      [DAY]: 'page-a',
+    });
+    expect(new AppStore(() => t(10), kv, '박진규').getSnapshot().state.notion.pageIds).toEqual({
+      [DAY]: 'page-b',
+    });
+  });
+
+  it('새 직원 칸은 연결 설정만 물려받는다 — 위젯마다 접근 키를 다시 넣지 않도록', () => {
+    const kv = memoryStore();
+    const shared = new AppStore(() => t(9), kv);
+    shared.updateNotionSettings({
+      autoSync: false,
+      accessKey: 'team-key',
+      mapping: { date: '근무 일자' },
+      pageIds: { [DAY]: 'page-of-someone-else' },
+    });
+    shared.setEmployeeName('하정언');
+    shared.perform('clock_in');
+
+    const fresh = new AppStore(() => t(10), kv, '박진규');
+    const { notion, logs } = fresh.getSnapshot().state;
+
+    expect(notion.accessKey).toBe('team-key');
+    expect(notion.mapping.date).toBe('근무 일자');
+    // 사람의 것은 물려받지 않는다 — 남의 기록을 자기 것으로 삼는 셈이므로
+    expect(notion.employeeName).toBe('');
+    expect(notion.pageIds).toEqual({});
+    expect(logs).toEqual({});
+  });
+
+  it('이미 자기 칸이 있으면 공용 칸을 다시 물려받지 않는다', () => {
+    const kv = memoryStore();
+    const first = widget('박진규', 9, kv);
+    first.perform('clock_in');
+
+    const shared = new AppStore(() => t(10), kv);
+    shared.updateNotionSettings({ autoSync: false, accessKey: 'changed-later' });
+
+    const again = new AppStore(() => t(11), kv, '박진규');
+    expect(computeDay(again.logFor(DAY), t(11)).status).toBe('working');
+    expect(again.getSnapshot().state.notion.employeeName).toBe('박진규');
+  });
+
+  it('직원을 지정하지 않으면 예전처럼 공용 칸을 쓴다', () => {
+    const kv = memoryStore();
+    const plain = new AppStore(() => t(9), kv);
+    plain.updateNotionSettings({ autoSync: false });
+    plain.setEmployeeName('하정언');
+    plain.perform('clock_in');
+
+    const reopened = new AppStore(() => t(10), kv);
+    expect(reopened.getSnapshot().state.notion.employeeName).toBe('하정언');
+    expect(computeDay(reopened.logFor(DAY), t(10)).status).toBe('working');
+  });
+});

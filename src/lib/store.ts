@@ -31,17 +31,21 @@ import {
 import { mergeDayLogs, sameDayLog, serializeDayLog } from '../../shared/dayLog';
 import {
   BACKUP_KEY,
+  SHARED_KEYS,
   STORAGE_KEY,
   createInitialState,
   detectStore,
+  keysFor,
   loadState,
   normalizeState,
   saveState,
+  seedFromShared,
   type AppState,
   type KeyValueStore,
   type LogicalFieldKey,
   type NotionSettings,
   type OutboxEntry,
+  type StateKeys,
 } from './storage';
 import { toDateKey } from './time';
 import { planVacationChange, type VacationConfig } from './vacation';
@@ -117,12 +121,20 @@ export class AppStore {
   private draining = false;
   private lastBackendCheckAt = 0;
 
+  private keys: StateKeys;
+
   constructor(
     private readonly now: () => number = () => Date.now(),
     store?: KeyValueStore,
+    /**
+     * 이 인스턴스가 쓸 저장 칸의 이름. URL 이 직원을 지정했을 때 그 이름을 넘긴다.
+     * 같은 페이지에 위젯을 여러 개 띄워도 서로 덮어쓰지 않게 하는 유일한 장치다.
+     */
+    namespace: string | null = null,
   ) {
     this.store = store ?? detectStore();
-    const state = backfillMapping(loadState(this.store, this.now()));
+    this.keys = keysFor(namespace);
+    const state = backfillMapping(this.loadOrSeed(this.now()));
     this.snapshot = {
       state,
       runtime: {
@@ -146,10 +158,25 @@ export class AppStore {
    * `storage` 이벤트는 **다른** 탭에서만 발생하므로 자기 저장에는 반응하지 않는다.
    * 이게 없으면 여러 탭을 띄워 둔 사용자가 탭마다 서로 다른 근무시간을 보게 된다.
    */
+  /**
+   * 이 인스턴스의 칸을 읽는다. 아직 없으면 공용 칸의 연결 설정만 물려받아 시작한다.
+   *
+   * 기록 자체는 물려받지 않는다 — 그러면 다른 사람 기록을 자기 것으로 삼는 셈이다.
+   * 비어 있어도 곧 `pullDay` 가 Notion 에서 그 사람 기록을 가져온다.
+   */
+  private loadOrSeed(now: number): AppState {
+    if (this.keys.main === SHARED_KEYS.main) return loadState(this.store, now, this.keys);
+    const own = this.store.getItem(this.keys.main) ?? this.store.getItem(this.keys.backup);
+    if (own) return loadState(this.store, now, this.keys);
+    return seedFromShared(loadState(this.store, now), now);
+  }
+
   private watchOtherTabs() {
     if (typeof window === 'undefined' || !this.store.persistent) return;
     window.addEventListener('storage', (e) => {
-      if (e.key !== null && e.key !== STORAGE_KEY) return;
+      // 자기 칸의 변경만 따라간다. 같은 페이지의 다른 직원 위젯이 저장했다고
+      // 이쪽까지 그 사람 상태로 바뀌면 안 된다.
+      if (e.key !== null && e.key !== this.keys.main) return;
       this.snapshot = { ...this.snapshot, state: this.latestState() };
       this.emit();
     });
@@ -177,7 +204,7 @@ export class AppStore {
    */
   private latestState(): AppState {
     try {
-      return backfillMapping(loadState(this.store, this.now()));
+      return backfillMapping(loadState(this.store, this.now(), this.keys));
     } catch {
       return this.snapshot.state;
     }
@@ -185,7 +212,7 @@ export class AppStore {
 
   private setState(updater: (s: AppState) => AppState) {
     const next = updater(this.latestState());
-    const result = saveState(this.store, next);
+    const result = saveState(this.store, next, this.keys);
     this.snapshot = {
       state: next,
       runtime: {
