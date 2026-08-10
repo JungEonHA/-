@@ -1,0 +1,6 @@
+tests/
+e2e/
+scripts/screenshot.mjs
+playwright.config.ts
+test-results/
+playwright-report/

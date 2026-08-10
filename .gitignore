@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.vite/
+.vercel/
+coverage/
+test-results/
+playwright-report/
+blob-report/
+*.tsbuildinfo
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example

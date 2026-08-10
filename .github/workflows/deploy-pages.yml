@@ -1,0 +1,62 @@
+name: Deploy to GitHub Pages
+
+# 정적 배포. 근무 기록 / 휴가 / 주·월 집계는 전부 동작하지만, Notion 동기화용
+# 서버리스 함수는 GitHub Pages 에 존재하지 않는다.
+# Notion 저장까지 쓰려면 Vercel 배포(README 참고)를 사용하거나,
+# 앱 설정 > "백엔드 주소" 에 Vercel 주소를 입력해 연결한다.
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - 'claude/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck & unit tests
+        run: npm test
+
+      - name: Build
+        env:
+          # 저장소 이름이 "-" 이므로 Pages 경로는 https://<user>.github.io/-/ 가 된다.
+          BASE_PATH: /${{ github.event.repository.name }}/
+        run: npm run build
+
+      - name: Disable Jekyll processing
+        run: touch dist/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
