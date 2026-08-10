@@ -38,6 +38,12 @@ jobs:
       - name: Typecheck & unit tests
         run: npm test
 
+      # 전체 체크아웃에서는 모든 파일이 있으므로 통과하지만, Vercel 은
+      # .vercelignore 로 걸러진 파일만 올린 뒤 빌드한다. 그 조건을 복제해
+      # "제외된 파일을 참조하는" 회귀를 여기서 잡는다.
+      - name: Verify deploy-shape build
+        run: npm run verify:deploy
+
       - name: Build
         env:
           # 저장소 이름이 "-" 이므로 Pages 경로는 https://<user>.github.io/-/ 가 된다.

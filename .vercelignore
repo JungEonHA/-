@@ -1,6 +1,20 @@
+# Vercel 로 업로드하지 않을 파일.
+#
+# 주의: 여기서 제외한 파일은 배포 중 타입체크에서도 "존재하지 않는" 상태가 된다.
+# 따라서 tsconfig.build.json 의 include 대상은 절대 여기에 들어오면 안 된다.
+# (이 규칙이 깨져서 배포가 실패한 적이 있다. `npm run verify:deploy` 로 검증한다.)
+
+# 테스트 — production 빌드에 불필요하며 tsconfig.build.json 에서도 제외된다
 tests/
 e2e/
-scripts/screenshot.mjs
+src/**/*.test.ts
+src/**/*.test.tsx
 playwright.config.ts
+vitest.config.ts
 test-results/
 playwright-report/
+
+# 로컬 전용 개발 도구
+scripts/screenshot.mjs
+scripts/notion-doctor.ts
+scripts/verify-deploy-build.mjs

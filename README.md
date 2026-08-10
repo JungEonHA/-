@@ -151,10 +151,30 @@ npm run dev               # http://127.0.0.1:5173
 로컬에서 통과한 동작이 배포에서도 그대로 동작한다.
 
 ```bash
-npm test          # 단위/통합 테스트 (모의 Notion 서버 사용)
-npm run e2e       # Playwright 종단 테스트 (실제 브라우저 + 가상 시계)
-npm run build     # 타입체크 + 프로덕션 빌드
+npm test              # 단위/통합 테스트 (모의 Notion 서버 사용)
+npm run e2e           # Playwright 종단 테스트 (실제 브라우저 + 가상 시계)
+npm run build         # production 타입체크 + 프로덕션 빌드
+npm run typecheck     # 테스트·E2E 까지 포함한 전체 타입체크
+npm run verify:deploy # 배포 형태(.vercelignore 적용)로 빌드를 재현해 검증
 ```
+
+### 빌드 설정이 두 벌인 이유
+
+| 파일 | 범위 | 쓰는 곳 |
+| --- | --- | --- |
+| `tsconfig.json` | 전부 (src·api·shared·tests·e2e·scripts) | 편집기, `npm run typecheck`, vitest |
+| `tsconfig.build.json` | production 소스만 (테스트 제외) | `npm run build` → 배포 |
+| `vite.config.ts` | production 빌드 | `vite build`, `vite dev` |
+| `vitest.config.ts` | 위 설정 + `test` 블록 | `vitest` |
+
+Vercel 은 `.vercelignore` 로 걸러진 파일만 업로드한 뒤 `npm run build` 를 돌린다.
+그래서 **production 타입체크가 테스트 파일을 검사하면 안 된다** — 업로드되지 않은
+파일(`tests/mocks/notionMock.ts` 등)을 참조하다 `TS2307` 로 배포가 깨진다.
+전체 체크아웃 상태인 로컬·CI 에서는 재현되지 않으므로, `npm run verify:deploy` 가
+배포 조건을 그대로 복제해 검증하고 CI 에서도 같은 검사를 돌린다.
+
+> 불변 조건: `tsconfig.build.json` 의 `include` 대상은 `.vercelignore` 에 들어가면 안 된다.
+> 같은 이유로 vitest 의 `test` 블록은 `vite.config.ts` 가 아니라 `vitest.config.ts` 에 둔다.
 
 ---
 

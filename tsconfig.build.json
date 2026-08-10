@@ -1,0 +1,27 @@
+{
+  // Production 빌드 전용 타입체크 설정.
+  //
+  // 왜 별도 파일인가:
+  //   tsconfig.json 은 편집기와 vitest 를 위해 테스트/E2E 까지 전부 포함한다.
+  //   그런데 배포 환경(Vercel)에는 .vercelignore 로 걸러진 파일만 업로드되므로,
+  //   그 설정으로 배포 중 타입체크를 돌리면 "업로드되지 않은 파일"을 참조하다
+  //   TS2307 로 빌드가 깨진다. 실제로 그렇게 깨졌었다.
+  //
+  // 불변 조건:
+  //   여기 include 되는 경로는 반드시 .vercelignore 에서 제외되지 않아야 한다.
+  //   `npm run verify:deploy` 가 이 조건을 실제 배포 형태로 복제해 검증한다.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // vitest/globals 를 빼면 테스트 전역(describe/it)이 프로덕션 코드에 새는 것도 막힌다.
+    // 배포 환경이 devDependencies 를 설치하지 않아도 타입체크가 성립한다.
+    "types": ["node"]
+  },
+  "include": [
+    "src",
+    "api",
+    "shared",
+    "vite.config.ts",
+    "scripts/vite-plugin-notion-api.ts"
+  ],
+  "exclude": ["**/*.test.ts", "**/*.test.tsx", "tests", "e2e", "dist", "node_modules"]
+}

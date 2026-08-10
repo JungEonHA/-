@@ -1,3 +1,8 @@
+// Production 빌드 설정. 테스트 설정은 vitest.config.ts 에 분리되어 있다.
+//
+// 여기에 vitest 의 `test` 블록을 두면 안 된다. 그 키는 vitest 의 타입 증강이
+// 있어야 유효한데, 배포 중 타입체크(tsconfig.build.json)는 devDependencies 타입에
+// 기대지 않으므로 TS2769 로 빌드가 깨진다.
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { notionDevApiPlugin } from './scripts/vite-plugin-notion-api';
@@ -22,11 +27,5 @@ export default defineConfig({
   preview: {
     host: '127.0.0.1',
     port: 4173,
-  },
-  test: {
-    environment: 'jsdom',
-    globals: true,
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'tests/**/*.test.ts'],
-    setupFiles: [],
   },
 });
