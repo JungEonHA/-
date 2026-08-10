@@ -49,6 +49,8 @@ function makeClient(mock: NotionMock) {
 
 const RECORD: DayRecordPayload = {
   date: '2026-08-10',
+  employeeName: null,
+  eventLogText: null,
   clockInIso: '2026-08-10T09:00:00+09:00',
   clockOutIso: '2026-08-10T18:00:00+09:00',
   clockInText: '09:00',

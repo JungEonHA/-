@@ -176,6 +176,15 @@ export function SettingsPanel() {
           >
             오늘 기록 다시 보내기
           </button>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            data-testid="btn-pull-today"
+            disabled={runtime.backend !== 'ready'}
+            onClick={() => void store.pullDay(store.activeDate, { notify: true })}
+          >
+            다른 기기 기록 가져오기
+          </button>
         </div>
 
         <p className="field__hint mt12">
@@ -212,6 +221,16 @@ function EmployeeCard() {
 
   return (
     <Card title="직원" hint={employeeName || '미설정'}>
+      {!mapping.eventLog && (
+        <div style={{ marginBottom: 12 }}>
+          <Banner kind="warn">
+            <b>기기 연동 로그</b>가 매핑되지 않았습니다. 지금은 데스크탑과 노트북 기록이 따로
+            쌓이며, 나중에 저장한 기기가 앞선 기록을 덮어씁니다. 아래 “Property 매핑”에서
+            지정하거나 “누락된 Property를 Notion에 추가”를 눌러 주세요.
+          </Banner>
+        </div>
+      )}
+
       {!mapping.employee ? (
         <Banner kind="warn">
           <b>직원</b> 필드가 매핑되지 않았습니다. 아래 “Property 매핑”에서 Notion의 직원 Property를

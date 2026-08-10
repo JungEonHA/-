@@ -21,12 +21,14 @@ import { buildRecord } from './record';
 import {
   ApiError,
   addProperties as apiAddProperties,
+  getDay,
   getHealth,
   getSchema,
   upsertRecord,
   type ClientConfig,
   type HealthInfo,
 } from './notionClient';
+import { mergeDayLogs, sameDayLog, serializeDayLog } from '../../shared/dayLog';
 import {
   BACKUP_KEY,
   STORAGE_KEY,
@@ -425,6 +427,63 @@ export class AppStore {
   }
 
   /**
+   * 다른 기기에서 합쳐진 하루 기록을 이 기기의 기록으로 받아들인다.
+   * 실제로 달라졌을 때만 저장한다 — 매 동기화마다 무의미한 쓰기를 만들지 않기 위해.
+   */
+  private adoptDayLog(incoming: DayLog): boolean {
+    const current = this.snapshot.state.logs[incoming.date];
+    const merged = mergeDayLogs(current ?? null, incoming);
+    if (!merged || sameDayLog(current ?? null, merged)) return false;
+
+    this.setState((s) => ({ ...s, logs: { ...s.logs, [merged.date]: merged } }));
+    return true;
+  }
+
+  /**
+   * 다른 기기가 남긴 그날의 기록을 읽어 와 합친다.
+   *
+   * 앱을 열었을 때와 창으로 돌아왔을 때 부른다. 이게 없으면 노트북 화면은 "출근 전"인데
+   * Notion 에는 근무 중인 모순된 상태가 보인다. 읽기 전용이라 실패해도 잃는 것이 없다.
+   */
+  async pullDay(dateKey: string, opts: { notify?: boolean } = {}): Promise<void> {
+    const { mapping, employeeName } = this.snapshot.state.notion;
+    if (!mapping.eventLog) {
+      if (opts.notify) {
+        this.notify('error', '설정 › Property 매핑에서 “기기 연동 로그”를 지정해야 기기 간 기록이 합쳐집니다.');
+      }
+      return;
+    }
+    if (this.backendStatus() !== 'ready') {
+      await this.checkBackend({ force: opts.notify === true });
+      if (this.backendStatus() !== 'ready') return;
+    }
+
+    try {
+      const res = await getDay(this.clientConfig(), {
+        dateKey,
+        employeeName: employeeName.trim() || null,
+        mapping,
+      });
+      if (res.pageId) {
+        this.setState((s) => ({
+          ...s,
+          notion: { ...s.notion, pageIds: { ...s.notion.pageIds, [dateKey]: res.pageId! } },
+        }));
+      }
+      const changed = res.dayLog ? this.adoptDayLog(res.dayLog) : false;
+      if (opts.notify) {
+        this.notify(
+          changed ? 'success' : 'info',
+          changed ? '다른 기기의 기록을 가져와 합쳤습니다.' : '가져올 새 기록이 없습니다.',
+        );
+      }
+    } catch (err) {
+      // 읽기 실패는 조용히 넘긴다 — 로컬 기록은 그대로이고 다음 기회에 다시 시도한다.
+      if (opts.notify) this.notify('error', `기록을 가져오지 못했습니다: ${(err as Error).message}`);
+    }
+  }
+
+  /**
    * 이미 동기화가 끝난 날짜라도 강제로 다시 보낸다.
    *
    * 매핑을 나중에 고쳤을 때 예전에는 다시 보낼 방법이 아예 없었다 —
@@ -529,15 +588,23 @@ export class AppStore {
     }
 
     // 전송 직전에 최신 상태로 페이로드를 만든다 — 낡은 값 덮어쓰기 방지.
-    const record = buildRecord(computeDay(log, this.now()), notion.employeeName);
+    const record = buildRecord(
+      computeDay(log, this.now()),
+      notion.employeeName,
+      serializeDayLog(log),
+    );
 
     try {
       const res = await upsertRecord(this.clientConfig(), {
         record,
+        dayLog: notion.mapping.eventLog ? log : null,
         mapping: notion.mapping,
         schema: notion.schema,
         knownPageId: notion.pageIds[dateKey] ?? null,
       });
+
+      // 서버가 다른 기기의 이벤트까지 합쳐 돌려주면 그것을 이 기기의 기록으로 삼는다.
+      if (res.mergedLog) this.adoptDayLog(res.mergedLog);
 
       const warning = res.duplicateWarning ?? res.foreignRowWarning ?? null;
       this.setState((s) => {

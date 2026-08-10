@@ -282,6 +282,8 @@ async function runWriteTest(
   const noonKst = new Date(`${dateKey}T12:00:00+09:00`).getTime();
   const record: DayRecordPayload = {
     date: dateKey,
+    employeeName: null,
+    eventLogText: null,
     clockInIso: toKstIso(noonKst),
     clockOutIso: toKstIso(noonKst + 60_000),
     clockInText: '12:00',

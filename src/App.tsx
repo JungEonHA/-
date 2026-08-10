@@ -6,7 +6,7 @@ import { VacationPanel } from './components/VacationPanel';
 import { SummaryPanel } from './components/SummaryPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { computeDay } from './lib/events';
-import { formatClockSeconds } from './lib/time';
+import { DAY_MS, formatClockSeconds, toDateKey } from './lib/time';
 import { StatusChip } from './components/ui';
 
 type Tab = 'home' | 'vacation' | 'summary' | 'settings';
@@ -20,6 +20,9 @@ const TABS: Array<{ key: Tab; label: string; icon: string }> = [
 
 /** 백그라운드에서 대기열을 비우는 주기 */
 const DRAIN_INTERVAL_MS = 60_000;
+
+/** 창으로 돌아올 때마다 Notion 을 읽지 않도록 두는 최소 간격 */
+const PULL_THROTTLE_MS = 20_000;
 
 export default function App() {
   const store = useStore();
@@ -35,6 +38,30 @@ export default function App() {
   // 백엔드 존재 여부는 시작 시 한 번 확인한다.
   useEffect(() => {
     void store.checkBackend();
+  }, [store]);
+
+  // 다른 기기(데스크탑/노트북)가 남긴 기록을 가져와 합친다.
+  //
+  // 앱을 열 때 한 번, 그리고 창으로 돌아올 때마다 확인한다 — 기기를 옮겨 앉는 순간이
+  // 곧 "창을 다시 보는" 순간이기 때문이다. 자정을 넘긴 근무를 놓치지 않도록
+  // 처음 열 때는 어제 날짜도 함께 본다. 읽기 전용이라 실패해도 잃는 것이 없다.
+  useEffect(() => {
+    void store.pullDay(toDateKey(Date.now()));
+    void store.pullDay(toDateKey(Date.now() - DAY_MS));
+
+    let lastPullAt = Date.now();
+    const pull = () => {
+      if (document.visibilityState === 'hidden') return;
+      if (Date.now() - lastPullAt < PULL_THROTTLE_MS) return;
+      lastPullAt = Date.now();
+      void store.pullDay(store.activeDate);
+    };
+    document.addEventListener('visibilitychange', pull);
+    window.addEventListener('focus', pull);
+    return () => {
+      document.removeEventListener('visibilitychange', pull);
+      window.removeEventListener('focus', pull);
+    };
   }, [store]);
 
   // 실패한 동기화를 주기적으로/온라인 복귀 시 재시도한다.

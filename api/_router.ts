@@ -5,11 +5,14 @@
  * Notion Secret 은 오직 여기(서버)에서만 읽히며 응답에 포함되지 않는다.
  */
 
+import type { DayLog } from '../shared/events.js';
+
 import {
   NotionClient,
   NotionError,
   addMissingProperties,
   fetchDatabaseSchema,
+  fetchDayLog,
   normalizeId,
   suggestMapping,
   upsertDayRecord,
@@ -217,7 +220,34 @@ export async function handleApiRequest(req: ApiRequest, deps: RouterDeps): Promi
         schema,
         mapping,
         record,
+        dayLog: (req.body?.dayLog as DayLog | undefined) ?? null,
         knownPageId: req.body?.knownPageId ?? null,
+      });
+      return json(200, result, cors);
+    }
+
+    // ---- 한 직원의 특정 날짜 기록 읽기 (기기 간 연동용, 읽기 전용) ----
+    if (path === '/notion/day' && req.method === 'GET') {
+      const dateKey = req.query['date'] ?? '';
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+        return json(
+          400,
+          { error: 'date=YYYY-MM-DD 가 필요합니다.', code: 'bad_request', retryable: false },
+          cors,
+        );
+      }
+      const schema = await fetchDatabaseSchema(client, databaseId);
+      // 매핑은 사용자가 확정한 값이 우선이고, 없으면 제안값으로 최선을 다한다.
+      const { mapping: suggested } = suggestMapping(schema.properties);
+      const effective: FieldMapping = { ...suggested, ...parseMapping(req.query['mapping']) };
+
+      const result = await fetchDayLog({
+        client,
+        databaseId,
+        schema,
+        mapping: effective,
+        dateKey,
+        employeeName: req.query['employee'] ?? null,
       });
       return json(200, result, cors);
     }
@@ -257,6 +287,20 @@ export async function handleApiRequest(req: ApiRequest, deps: RouterDeps): Promi
     return json(404, { error: `알 수 없는 경로: ${path}`, code: 'not_found', retryable: false }, cors);
   } catch (err) {
     return json(statusFor(err), errorBody(err), cors);
+  }
+}
+
+/**
+ * 쿼리스트링으로 넘어온 매핑(JSON)을 읽는다.
+ * 값이 없거나 깨졌으면 빈 객체 — 그러면 서버의 제안 매핑이 그대로 쓰인다.
+ */
+function parseMapping(raw: string | undefined): FieldMapping {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as FieldMapping) : {};
+  } catch {
+    return {};
   }
 }
 

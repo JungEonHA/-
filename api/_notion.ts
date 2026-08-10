@@ -30,31 +30,14 @@ export {
   type LogicalField,
 } from '../shared/fields.js';
 
+import { computeDay, type DayLog } from '../shared/events.js';
+import { buildRecord, type DayRecordPayload } from '../shared/record.js';
+import { mergeDayLogs, parseDayLog, serializeDayLog } from '../shared/dayLog.js';
+
+export { type DayRecordPayload } from '../shared/record.js';
+
 export const DEFAULT_NOTION_VERSION = '2022-06-28';
 const NOTION_BASE = 'https://api.notion.com/v1';
-
-// ---------------------------------------------------------------------------
-// 앱이 서버로 보내는 하루치 기록
-// ---------------------------------------------------------------------------
-
-export interface DayRecordPayload {
-  /** KST "YYYY-MM-DD" */
-  date: string;
-  /** 이 기록의 주인. 날짜와 함께 행을 가르는 기준. 미설정이면 null */
-  employeeName?: string | null;
-  /** ISO8601 (+09:00). 미출근이면 null */
-  clockInIso: string | null;
-  clockOutIso: string | null;
-  /** 표시용 "HH:mm" */
-  clockInText: string | null;
-  clockOutText: string | null;
-  actualHours: number;
-  awayHours: number;
-  vacationHours: number;
-  creditedHours: number;
-  /** 예: "퇴근 완료" */
-  statusText: string;
-}
 
 // ---------------------------------------------------------------------------
 // Notion HTTP 클라이언트
@@ -256,6 +239,8 @@ export function encodeValue(
 
   switch (propType) {
     case 'title':
+      // 연동 로그가 실수로 제목에 매핑되면 제목이 기계값으로 덮인다. 그건 막는다.
+      if (kind === 'eventLog') return null;
       return text === null ? null : { title: [{ type: 'text', text: { content: text } }] };
 
     case 'rich_text':
@@ -305,6 +290,7 @@ function textValueFor(field: LogicalField, r: DayRecordPayload): string | null {
     case 'title': return appRowTitle(r);
     case 'date': return r.date;
     case 'employee': return r.employeeName?.trim() ? r.employeeName.trim() : null;
+    case 'eventLog': return r.eventLogText ?? null;
     case 'clockIn': return r.clockInText ?? '-';
     case 'clockOut': return r.clockOutText ?? '-';
     case 'actualWork': return `${r.actualHours}h`;
@@ -404,6 +390,11 @@ export interface UpsertResult {
   duplicateWarning?: string;
   /** 앱이 만들지 않은 행을 발견해 건드리지 않고 비켜 갔을 때의 안내 */
   foreignRowWarning?: string;
+  /**
+   * 다른 기기의 기록까지 합친 결과. 클라이언트는 이걸 자기 로컬 기록으로 받아들여
+   * 데스크탑/노트북이 같은 하루를 보게 된다. 연동 로그를 매핑하지 않았으면 없다.
+   */
+  mergedLog?: DayLog;
 }
 
 export async function upsertDayRecord(args: {
@@ -412,13 +403,50 @@ export async function upsertDayRecord(args: {
   schema: DatabaseSchema;
   mapping: FieldMapping;
   record: DayRecordPayload;
+  /** 이 기기의 원본 이벤트 목록. 주면 서버가 기존 행의 로그와 합쳐서 다시 계산한다. */
+  dayLog?: DayLog | null;
   /** 앱이 기억하고 있는 페이지 id (빠른 경로). 없으면 조회로 찾는다. */
   knownPageId?: string | null;
+  /** 진행 중인 근무시간 계산 기준 시각 (테스트 주입용) */
+  now?: number;
 }): Promise<UpsertResult> {
-  const { client, schema, mapping, record } = args;
+  const { client, schema, mapping } = args;
   const databaseId = normalizeId(args.databaseId);
+  const now = args.now ?? Date.now();
 
-  const { properties, skipped } = buildProperties(schema, mapping, record);
+  let record = args.record;
+  let mergedLog: DayLog | null = args.dayLog ?? null;
+
+  const logProp = mapping.eventLog
+    ? schema.properties.find((p) => p.name === mapping.eventLog)
+    : undefined;
+
+  /**
+   * 기존 행에 실려 있던 다른 기기의 이벤트를 읽어 합친 뒤 근무시간을 다시 계산한다.
+   *
+   * 이걸 서버에서 하는 이유: 클라이언트가 "읽고 → 합치고 → 쓰는" 동안 다른 기기가
+   * 끼어들면 그 사이 기록이 사라진다. 조회와 쓰기가 한 요청 안에서 끝나야 안전하다.
+   */
+  function absorb(page: any): void {
+    if (!logProp || !args.dayLog) return;
+    const raw = page?.properties?.[logProp.name];
+    const remote = parseDayLog(args.dayLog.date, raw ? plainTextFromRich(raw.rich_text) : '');
+    if (!remote) return;
+    mergedLog = mergeDayLogs(args.dayLog, remote);
+  }
+
+  function currentProperties() {
+    if (logProp && mergedLog) {
+      record = buildRecord(
+        computeDay(mergedLog, now),
+        args.record.employeeName ?? null,
+        serializeDayLog(mergedLog),
+      );
+    }
+    return buildProperties(schema, mapping, record);
+  }
+
+  let { properties, skipped } = currentProperties();
   if (Object.keys(properties).length === 0) {
     throw new NotionError(
       '쓸 수 있는 Property가 하나도 매핑되지 않았습니다. 설정에서 매핑을 확인하세요.',
@@ -431,10 +459,20 @@ export async function upsertDayRecord(args: {
   // 1) 앱이 기억하는 pageId 로 바로 갱신 시도
   if (args.knownPageId) {
     try {
-      const page = await client.request<any>('PATCH', `/pages/${normalizeId(args.knownPageId)}`, {
-        properties,
-      });
-      return { action: 'updated', pageId: String(page.id), url: page.url, skipped };
+      const pageId = normalizeId(args.knownPageId);
+      // 연동 로그를 쓰는 경우에는 먼저 읽어야 다른 기기의 이벤트를 잃지 않는다.
+      if (logProp && args.dayLog) {
+        absorb(await client.request<any>('GET', `/pages/${pageId}`));
+        ({ properties, skipped } = currentProperties());
+      }
+      const page = await client.request<any>('PATCH', `/pages/${pageId}`, { properties });
+      return {
+        action: 'updated',
+        pageId: String(page.id),
+        url: page.url,
+        skipped,
+        ...(mergedLog ? { mergedLog } : {}),
+      };
     } catch (err) {
       // 페이지가 지워졌거나 접근 불가하면 조회 경로로 폴백한다.
       const status = err instanceof NotionError ? err.status : 0;
@@ -493,6 +531,10 @@ export async function upsertDayRecord(args: {
     const target = owned.reduce((oldest: any, cur: any) =>
       String(cur.created_time ?? '') < String(oldest.created_time ?? '') ? cur : oldest,
     );
+    // 조회 결과에 이미 Property 값이 들어 있으므로 추가 요청 없이 합칠 수 있다.
+    absorb(target);
+    ({ properties, skipped } = currentProperties());
+
     const page = await client.request<any>('PATCH', `/pages/${normalizeId(target.id)}`, {
       properties,
     });
@@ -501,6 +543,7 @@ export async function upsertDayRecord(args: {
       pageId: String(page.id),
       url: page.url,
       skipped,
+      ...(mergedLog ? { mergedLog } : {}),
       ...(owned.length > 1
         ? {
             duplicateWarning:
@@ -522,8 +565,68 @@ export async function upsertDayRecord(args: {
     pageId: String(page.id),
     url: page.url,
     skipped,
+    ...(mergedLog ? { mergedLog } : {}),
     ...(foreignRowWarning ? { foreignRowWarning } : {}),
   };
+}
+
+/**
+ * 한 직원의 특정 날짜 행에서 연동 로그만 읽어 온다 (쓰기 없음).
+ *
+ * 앱을 열자마자 "다른 기기에서 이미 출근했는지"를 알아야 하기 때문에 필요하다.
+ * 이게 없으면 노트북을 열었을 때 화면은 "출근 전"인데 Notion 에는 근무 중인
+ * 모순된 상태가 보인다.
+ */
+export async function fetchDayLog(args: {
+  client: NotionClient;
+  databaseId: string;
+  schema: DatabaseSchema;
+  mapping: FieldMapping;
+  dateKey: string;
+  employeeName: string | null;
+}): Promise<{ found: boolean; pageId: string | null; dayLog: DayLog | null }> {
+  const { client, schema, mapping, dateKey } = args;
+  const databaseId = normalizeId(args.databaseId);
+  const employeeName = args.employeeName?.trim() || null;
+
+  const dateProp = mapping.date ? schema.properties.find((p) => p.name === mapping.date) : undefined;
+  const employeeProp =
+    mapping.employee && employeeName
+      ? schema.properties.find((p) => p.name === mapping.employee)
+      : undefined;
+
+  const filters: unknown[] = [];
+  if (dateProp) {
+    const f = buildDateFilter(dateProp, dateKey);
+    if (f) filters.push(f);
+  }
+  if (employeeProp && employeeName) {
+    const f = buildEmployeeFilter(employeeProp, employeeName);
+    if (f) filters.push(f);
+  }
+  if (filters.length === 0) return { found: false, pageId: null, dayLog: null };
+
+  const query = await client.request<any>('POST', `/databases/${databaseId}/query`, {
+    filter: filters.length === 1 ? filters[0] : { and: filters },
+    page_size: 25,
+  });
+  const rows = (query.results ?? []).filter((p: any) => p && p.archived !== true);
+
+  const ownedTitle = `${dateKey}${employeeName ? ` ${employeeName}` : ''} 근무기록`;
+  const owned = rows.filter((p: any) => pageTitleText(p) === ownedTitle);
+  if (owned.length === 0) return { found: false, pageId: null, dayLog: null };
+
+  const target = owned.reduce((oldest: any, cur: any) =>
+    String(cur.created_time ?? '') < String(oldest.created_time ?? '') ? cur : oldest,
+  );
+
+  const logProp = mapping.eventLog
+    ? schema.properties.find((p) => p.name === mapping.eventLog)
+    : undefined;
+  const raw = logProp ? target.properties?.[logProp.name] : undefined;
+  const dayLog = parseDayLog(dateKey, raw ? plainTextFromRich(raw.rich_text) : '');
+
+  return { found: true, pageId: String(target.id), dayLog };
 }
 
 // ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@
 
 import type { DatabaseSchemaLite, LogicalFieldKey } from './storage';
 import type { DayRecordPayload } from './record';
+import type { DayLog } from './events';
 
 export interface HealthInfo {
   ok: true;
@@ -147,12 +148,15 @@ export interface UpsertResponse {
   skipped: Array<{ field: LogicalFieldKey; reason: string }>;
   duplicateWarning?: string;
   foreignRowWarning?: string;
+  /** 다른 기기 기록까지 합친 결과. 연동 로그를 매핑했을 때만 온다. */
+  mergedLog?: DayLog;
 }
 
 export function upsertRecord(
   config: ClientConfig,
   args: {
     record: DayRecordPayload;
+    dayLog?: DayLog | null;
     mapping: Partial<Record<LogicalFieldKey, string>>;
     schema?: DatabaseSchemaLite | null;
     knownPageId?: string | null;
@@ -160,11 +164,34 @@ export function upsertRecord(
 ): Promise<UpsertResponse> {
   return call<UpsertResponse>(config, 'POST', '/notion-upsert', {
     record: args.record,
+    // 원본 이벤트 목록을 함께 보내면 서버가 기존 행의 로그와 합쳐 준다.
+    // 조회와 쓰기가 한 요청 안에서 끝나야 그 사이 다른 기기의 기록을 잃지 않는다.
+    ...(args.dayLog ? { dayLog: args.dayLog } : {}),
     mapping: args.mapping,
     // 스키마를 함께 보내면 서버의 왕복 요청을 줄인다. 없으면 서버가 직접 읽는다.
     ...(args.schema ? { schema: args.schema } : {}),
     knownPageId: args.knownPageId ?? null,
   });
+}
+
+export interface DayResponse {
+  found: boolean;
+  pageId: string | null;
+  dayLog: DayLog | null;
+}
+
+/** 다른 기기가 남긴 그날의 기록을 읽어 온다 (쓰기 없음). */
+export function getDay(
+  config: ClientConfig,
+  args: {
+    dateKey: string;
+    employeeName: string | null;
+    mapping: Partial<Record<LogicalFieldKey, string>>;
+  },
+): Promise<DayResponse> {
+  const params = new URLSearchParams({ date: args.dateKey, mapping: JSON.stringify(args.mapping) });
+  if (args.employeeName) params.set('employee', args.employeeName);
+  return call<DayResponse>(config, 'GET', `/notion-day?${params.toString()}`);
 }
 
 export function addProperties(

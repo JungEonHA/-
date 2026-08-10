@@ -739,3 +739,123 @@ describe('여러 탭을 열어 뒀을 때', () => {
     expect(after.logFor(DAY).events).toHaveLength(1);
   });
 });
+
+describe('데스크탑 ↔ 노트북 연동', () => {
+  /** 직원 + 기기 연동 로그까지 갖춘 DB */
+  function makeLinkedMock() {
+    return new NotionMock({
+      databaseId: DB_ID,
+      title: '근무 기록',
+      properties: {
+        '기록명': { id: 'p1', type: 'title' },
+        '근무 일자': { id: 'p2', type: 'date' },
+        '출근 시각': { id: 'p3', type: 'rich_text' },
+        '퇴근 시각': { id: 'p4', type: 'rich_text' },
+        '실 근무시간': { id: 'p5', type: 'number' },
+        '자리 비움': { id: 'p6', type: 'number' },
+        '상태': { id: 'p7', type: 'select', options: [] },
+        '직원': { id: 'p8', type: 'select', options: ['정어리', '박진규'] },
+        '이벤트로그': { id: 'p9', type: 'rich_text' },
+      },
+    });
+  }
+
+  /** 서로 다른 브라우저 = 서로 다른 저장소 */
+  async function device(m: NotionMock, hour: number) {
+    const d = await makeReadyStore(m, memoryStore());
+    d.store.setEmployeeName('정어리');
+    d.setClock(hour);
+    return d;
+  }
+
+  it('데스크탑에서 출근하고 노트북에서 퇴근할 수 있다', async () => {
+    const m = makeLinkedMock();
+    installBackend(m);
+
+    const desktop = await device(m, 9);
+    desktop.store.perform('clock_in');
+    await desktop.store.drainOutbox();
+
+    // 노트북을 연다 — 아직 이 기기에는 아무 기록도 없다
+    const laptop = await device(m, 18);
+    expect(laptop.store.logFor(DAY).events).toHaveLength(0);
+
+    await laptop.store.pullDay(DAY);
+
+    // 데스크탑의 출근을 넘겨받아 "근무 중" 이 된다
+    expect(computeDay(laptop.store.logFor(DAY), t(18)).status).toBe('working');
+    expect(laptop.store.perform('clock_out')).toBe(true);
+    await laptop.store.drainOutbox();
+
+    expect(m.pages).toHaveLength(1);
+    const row = m.read(m.pages[0]!.id);
+    expect(row['출근 시각']).toBe('09:00');
+    expect(row['퇴근 시각']).toBe('18:00');
+    expect(row['실 근무시간']).toBe(9);
+  });
+
+  it('노트북이 먼저 출근을 눌러도 데스크탑 기록을 덮어쓰지 않는다', async () => {
+    const m = makeLinkedMock();
+    installBackend(m);
+
+    const desktop = await device(m, 9);
+    desktop.store.perform('clock_in');
+    await desktop.store.drainOutbox();
+
+    // 연동 전 상태의 노트북이 그냥 출근을 눌러 버린 경우
+    const laptop = await device(m, 13);
+    laptop.store.perform('clock_in');
+    await laptop.store.drainOutbox();
+
+    // 서버가 두 이벤트를 합치므로 이른 출근(09:00)이 살아남는다
+    expect(m.pages).toHaveLength(1);
+    expect(m.read(m.pages[0]!.id)['출근 시각']).toBe('09:00');
+    // 노트북 화면도 합쳐진 기록을 따라간다
+    expect(computeDay(laptop.store.logFor(DAY), t(13)).clockInAt).toBe(t(9));
+  });
+
+  it('자리 비움까지 포함해 양쪽 이벤트가 모두 살아남는다', async () => {
+    const m = makeLinkedMock();
+    installBackend(m);
+
+    const desktop = await device(m, 9);
+    desktop.store.perform('clock_in');
+    desktop.setClock(12);
+    desktop.store.perform('away_start');
+    desktop.setClock(13);
+    desktop.store.perform('away_end');
+    await desktop.store.drainOutbox();
+
+    const laptop = await device(m, 18);
+    await laptop.store.pullDay(DAY);
+    laptop.store.perform('clock_out');
+    await laptop.store.drainOutbox();
+
+    const totals = computeDay(laptop.store.logFor(DAY), t(19));
+    expect(totals.actualMs).toBe(8 * HOUR_MS);
+    expect(totals.awayMs).toBe(1 * HOUR_MS);
+    expect(m.read(m.pages[0]!.id)['자리 비움']).toBe(1);
+  });
+
+  it('연동 로그를 매핑하지 않으면 가져오지 않는다 (기존 동작 유지)', async () => {
+    const { store } = await makeReadyStore(mock);
+    await store.pullDay(DAY);
+    expect(store.logFor(DAY).events).toHaveLength(0);
+  });
+
+  it('다른 직원의 기록은 가져오지 않는다', async () => {
+    const m = makeLinkedMock();
+    installBackend(m);
+
+    const jung = await device(m, 9);
+    jung.store.perform('clock_in');
+    await jung.store.drainOutbox();
+
+    const park = await makeReadyStore(m, memoryStore());
+    park.store.setEmployeeName('박진규');
+    park.setClock(10);
+    await park.store.pullDay(DAY);
+
+    expect(park.store.logFor(DAY).events).toHaveLength(0);
+  });
+});

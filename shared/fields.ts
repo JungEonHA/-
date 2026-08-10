@@ -16,10 +16,18 @@ export type LogicalField =
   | 'awayTime'
   | 'vacation'
   | 'credited'
-  | 'status';
+  | 'status'
+  | 'eventLog';
 
 /** 값의 성격. 어떤 Notion 타입에 어떻게 인코딩할지 결정한다. */
-export type FieldKind = 'dateOnly' | 'timestamp' | 'duration' | 'status' | 'employee' | 'text';
+export type FieldKind =
+  | 'dateOnly'
+  | 'timestamp'
+  | 'duration'
+  | 'status'
+  | 'employee'
+  | 'eventLog'
+  | 'text';
 
 export interface FieldSpec {
   key: LogicalField;
@@ -165,6 +173,18 @@ export const FIELD_SPECS: FieldSpec[] = [
     createName: '근무상태',
     required: false,
     descriptionKo: '퇴근 완료 / 근무 중 / 자리 비움 / 휴가 / 출근 전.',
+  },
+  {
+    key: 'eventLog',
+    labelKo: '기기 연동 로그',
+    kind: 'eventLog',
+    acceptedTypes: ['rich_text'],
+    candidates: ['이벤트로그', '기기연동로그', '기기연동', '동기화로그', 'eventlog', 'synclog'],
+    createAs: 'rich_text',
+    createName: '이벤트로그',
+    required: false,
+    descriptionKo:
+      '데스크탑·노트북을 오갈 때 기록을 합치는 데 쓰는 내부 값입니다. 사람이 읽을 필요는 없고, 매핑하지 않으면 기기별로 따로 기록됩니다.',
   },
 ];
 
