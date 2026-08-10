@@ -33,7 +33,7 @@ function realisticMock() {
       '상태': { id: 'p9', type: 'select', options: ['퇴근 완료', '근무 중'] },
       '메모': { id: 'p10', type: 'rich_text' },
       '담당자': { id: 'p11', type: 'people' },
-      '직원': { id: 'p12', type: 'select', options: ['정어리', '박진규'] },
+      '직원': { id: 'p12', type: 'select', options: ['하정언', '박진규'] },
     },
   });
 }
@@ -334,22 +334,22 @@ describe('중복 방지 upsert', () => {
   });
 
   it('직원이 다르면 같은 날짜라도 각자의 행을 갖는다', async () => {
-    const a = await upsert({ ...RECORD, employeeName: '정어리' });
+    const a = await upsert({ ...RECORD, employeeName: '하정언' });
     const b = await upsert({ ...RECORD, employeeName: '박진규', actualHours: 4 });
 
     expect(a.action).toBe('created');
     expect(b.action).toBe('created');
     expect(b.pageId).not.toBe(a.pageId);
     expect(mock.pages).toHaveLength(2);
-    expect(mock.read(a.pageId)['직원']).toBe('정어리');
+    expect(mock.read(a.pageId)['직원']).toBe('하정언');
     expect(mock.read(b.pageId)['직원']).toBe('박진규');
     expect(mock.read(a.pageId)['실 근무시간']).toBe(8); // 서로 덮어쓰지 않았다
     expect(mock.read(b.pageId)['실 근무시간']).toBe(4);
   });
 
   it('같은 직원의 같은 날짜는 계속 한 행으로 갱신된다', async () => {
-    const first = await upsert({ ...RECORD, employeeName: '정어리' });
-    const second = await upsert({ ...RECORD, employeeName: '정어리', actualHours: 9 });
+    const first = await upsert({ ...RECORD, employeeName: '하정언' });
+    const second = await upsert({ ...RECORD, employeeName: '하정언', actualHours: 9 });
 
     expect(second.action).toBe('updated');
     expect(second.pageId).toBe(first.pageId);
@@ -360,7 +360,7 @@ describe('중복 방지 upsert', () => {
   it('다른 직원이 손으로 만든 행에는 손대지 않는다', async () => {
     manualRow('dddd0000000000000000000000000009', '박진규 반차', 1_600_000_000_000, '박진규');
 
-    const res = await upsert({ ...RECORD, employeeName: '정어리' });
+    const res = await upsert({ ...RECORD, employeeName: '하정언' });
 
     expect(res.action).toBe('created');
     // 직원 필터가 걸리므로 애초에 조회 결과에도 잡히지 않는다

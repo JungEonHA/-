@@ -499,7 +499,7 @@ describe('여러 직원이 같은 DB 를 쓸 때', () => {
         '출근 시각': { id: 'p3', type: 'rich_text' },
         '퇴근 시각': { id: 'p4', type: 'rich_text' },
         '실 근무시간': { id: 'p5', type: 'number' },
-        '직원': { id: 'p6', type: 'select', options: ['정어리', '박진규'] },
+        '직원': { id: 'p6', type: 'select', options: ['하정언', '박진규'] },
       },
     });
   }
@@ -524,7 +524,7 @@ describe('여러 직원이 같은 DB 를 쓸 때', () => {
     const team = makeTeamMock();
     installBackend(team);
     const { store, setClock } = await makeReadyStore(team);
-    store.setEmployeeName('정어리');
+    store.setEmployeeName('하정언');
 
     store.perform('clock_in');
     setClock(18);
@@ -532,8 +532,8 @@ describe('여러 직원이 같은 DB 를 쓸 때', () => {
     await store.drainOutbox();
 
     expect(team.pages).toHaveLength(1);
-    expect(team.read(team.pages[0]!.id)['직원']).toBe('정어리');
-    expect(store.getSnapshot().state.lastSync?.employeeName).toBe('정어리');
+    expect(team.read(team.pages[0]!.id)['직원']).toBe('하정언');
+    expect(store.getSnapshot().state.lastSync?.employeeName).toBe('하정언');
   });
 
   it('두 사람이 같은 날 일해도 서로의 행을 덮어쓰지 않는다', async () => {
@@ -541,7 +541,7 @@ describe('여러 직원이 같은 DB 를 쓸 때', () => {
     installBackend(team);
 
     const a = await makeReadyStore(team);
-    a.store.setEmployeeName('정어리');
+    a.store.setEmployeeName('하정언');
     a.store.perform('clock_in');
     a.setClock(18);
     a.store.perform('clock_out');
@@ -556,7 +556,7 @@ describe('여러 직원이 같은 DB 를 쓸 때', () => {
 
     expect(team.pages).toHaveLength(2);
     const rows = team.pages.map((p) => team.read(p.id));
-    expect(rows.find((r) => r['직원'] === '정어리')?.['실 근무시간']).toBe(9);
+    expect(rows.find((r) => r['직원'] === '하정언')?.['실 근무시간']).toBe(9);
     expect(rows.find((r) => r['직원'] === '박진규')?.['실 근무시간']).toBe(5);
   });
 
@@ -565,7 +565,7 @@ describe('여러 직원이 같은 DB 를 쓸 때', () => {
     installBackend(team);
     const { store, setClock } = await makeReadyStore(team);
 
-    store.setEmployeeName('정어리');
+    store.setEmployeeName('하정언');
     store.perform('clock_in');
     setClock(18);
     store.perform('clock_out');
@@ -579,7 +579,7 @@ describe('여러 직원이 같은 DB 를 쓸 때', () => {
     await store.drainOutbox({ force: true });
 
     expect(team.pages).toHaveLength(2);
-    expect(team.read(firstPageId)['직원']).toBe('정어리');
+    expect(team.read(firstPageId)['직원']).toBe('하정언');
   });
 });
 
@@ -671,7 +671,7 @@ describe('업그레이드 시 매핑 보정', () => {
       properties: {
         '기록명': { id: 'p1', type: 'title' },
         '근무 일자': { id: 'p2', type: 'date' },
-        '직원': { id: 'p3', type: 'select', options: ['정어리', '박진규'] },
+        '직원': { id: 'p3', type: 'select', options: ['하정언', '박진규'] },
       },
     });
     installBackend(team);
@@ -754,7 +754,7 @@ describe('데스크탑 ↔ 노트북 연동', () => {
         '실 근무시간': { id: 'p5', type: 'number' },
         '자리 비움': { id: 'p6', type: 'number' },
         '상태': { id: 'p7', type: 'select', options: [] },
-        '직원': { id: 'p8', type: 'select', options: ['정어리', '박진규'] },
+        '직원': { id: 'p8', type: 'select', options: ['하정언', '박진규'] },
         '이벤트로그': { id: 'p9', type: 'rich_text' },
       },
     });
@@ -763,7 +763,7 @@ describe('데스크탑 ↔ 노트북 연동', () => {
   /** 서로 다른 브라우저 = 서로 다른 저장소 */
   async function device(m: NotionMock, hour: number) {
     const d = await makeReadyStore(m, memoryStore());
-    d.store.setEmployeeName('정어리');
+    d.store.setEmployeeName('하정언');
     d.setClock(hour);
     return d;
   }
@@ -873,7 +873,7 @@ describe('Notion Embed 위젯의 URL 설정', () => {
   it('저장된 값보다 URL 을 우선한다 — 블록 주소가 곧 "누구의 위젯인가"이므로', () => {
     const kv = memoryStore();
     const first = new AppStore(() => t(9), kv);
-    first.setEmployeeName('정어리');
+    first.setEmployeeName('하정언');
 
     const second = new AppStore(() => t(9), kv);
     second.applyBootParams({ employeeName: '박진규', accessKey: null });
@@ -886,7 +886,7 @@ describe('Notion Embed 위젯의 URL 설정', () => {
   it('사람이 바뀌면 이전 사람의 pageId 캐시를 버린다', () => {
     const kv = memoryStore();
     const first = new AppStore(() => t(9), kv);
-    first.setEmployeeName('정어리');
+    first.setEmployeeName('하정언');
     first.updateNotionSettings({ pageIds: { [DAY]: 'page-of-jeongeori' } });
 
     const second = new AppStore(() => t(9), kv);
@@ -908,14 +908,14 @@ describe('Notion Embed 위젯의 URL 설정', () => {
   it('URL 이 지정하지 않은 항목은 건드리지 않는다', () => {
     const kv = memoryStore();
     const first = new AppStore(() => t(9), kv);
-    first.setEmployeeName('정어리');
+    first.setEmployeeName('하정언');
     first.updateNotionSettings({ accessKey: 'stored-key' });
 
     const second = new AppStore(() => t(9), kv);
     expect(second.applyBootParams({ employeeName: null, accessKey: null })).toBe(false);
 
     const { notion } = second.getSnapshot().state;
-    expect(notion.employeeName).toBe('정어리');
+    expect(notion.employeeName).toBe('하정언');
     expect(notion.accessKey).toBe('stored-key');
   });
 

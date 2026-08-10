@@ -285,7 +285,7 @@ function EmployeeCard() {
           className="input"
           value={custom}
           data-testid="input-employee"
-          placeholder="예: 정어리"
+          placeholder="예: 홍길동"
           onChange={(e) => setCustom(e.target.value)}
           onBlur={() => store.setEmployeeName(custom)}
         />
