@@ -46,6 +46,16 @@ function urlFor(config: ClientConfig, path: string): string {
   return `${base}/api${path}`;
 }
 
+/**
+ * 호스팅 플랫폼의 HTML 오류 페이지에서 진단 코드를 뽑아낸다.
+ * (예: Vercel 의 FUNCTION_INVOCATION_FAILED / NO_RESPONSE_FROM_FUNCTION)
+ * 못 찾으면 null — 그 경우 상태 코드만 안내한다.
+ */
+function platformErrorCode(html: string): string | null {
+  const m = /\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,4})\b/.exec(html.slice(0, 4000));
+  return m ? ` · ${m[1]}` : null;
+}
+
 async function call<T>(
   config: ClientConfig,
   method: string,
@@ -76,7 +86,25 @@ async function call<T>(
   try {
     parsed = text ? JSON.parse(text) : null;
   } catch {
-    // 정적 호스팅(GitHub Pages 등)에서는 /api 가 없어 index.html(HTML)이 돌아온다.
+    // JSON 이 아니면 두 가지 경우가 있고, 둘을 구분하지 않으면 오진이 된다.
+    //
+    //  (1) 백엔드가 아예 없음 — 정적 호스팅에서는 /api 가 SPA fallback 에 걸려
+    //      index.html(200) 이 오거나 404 가 온다.
+    //  (2) 백엔드는 있는데 죽었음 — 서버리스 함수가 크래시하면 플랫폼이
+    //      5xx HTML 에러 페이지를 돌려준다.
+    //
+    // (2) 를 "정적 배포"로 안내하면 사용자가 배포 자체를 의심하게 되므로,
+    // 상태 코드로 갈라서 실제 원인을 그대로 보여준다.
+    if (res.status >= 500) {
+      throw new ApiError(
+        `백엔드는 있지만 서버 오류로 응답하지 못했습니다 (HTTP ${res.status}${
+          platformErrorCode(text) ?? ''
+        }). 배포 플랫폼의 함수 로그를 확인하세요.`,
+        'backend_crashed',
+        true,
+        res.status,
+      );
+    }
     throw new ApiError(
       '이 주소에는 Notion 연동 백엔드가 없습니다. (정적 배포 모드)',
       'no_backend',

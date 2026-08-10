@@ -71,6 +71,16 @@ function installNoBackend() {
   return calls;
 }
 
+/** 백엔드는 배포됐지만 함수가 크래시한 상황 (플랫폼이 HTML 오류 페이지를 준다) */
+function installCrashedBackend() {
+  vi.stubGlobal('fetch', async () => {
+    return new Response(
+      '<!doctype html><html><body>A server error has occurred\nFUNCTION_INVOCATION_FAILED</body></html>',
+      { status: 500 },
+    );
+  });
+}
+
 async function makeReadyStore(_mock: NotionMock, kv?: KeyValueStore) {
   let clock = t(9);
   const store = new AppStore(() => clock, kv ?? memoryStore());
@@ -280,6 +290,21 @@ describe('동기화 실패 시 데이터 안전성', () => {
 
     expect(computeDay(store.logFor(DAY), t(19)).actualMs).toBe(9 * HOUR_MS);
     expect(store.getSnapshot().state.outbox[DAY]).toBeDefined();
+  });
+
+  it('함수 크래시(5xx HTML)를 "정적 배포"로 오진하지 않는다', async () => {
+    // 백엔드가 없는 것과 백엔드가 죽은 것은 다르다. 둘 다 JSON 이 아닌 HTML 이
+    // 돌아오므로, 상태 코드로 구분하지 않으면 사용자가 배포 자체를 의심하게 된다.
+    installCrashedBackend();
+    const store = new AppStore(() => t(9), memoryStore());
+
+    await store.checkBackend();
+
+    const { runtime } = store.getSnapshot();
+    expect(runtime.backend).toBe('error');
+    expect(runtime.backendError).toContain('500');
+    expect(runtime.backendError).toContain('FUNCTION_INVOCATION_FAILED');
+    expect(runtime.backendError).not.toContain('정적 배포');
   });
 
   it('백엔드가 없다고 확인되면 자동 재확인을 반복하지 않는다', async () => {
