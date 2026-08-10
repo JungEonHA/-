@@ -153,12 +153,12 @@ function verifyServerlessFunction(stage) {
       "console.log('   /api/health →', health.body);",
       '',
       "// 토큰이 없을 때도 크래시가 아니라 JSON 오류를 돌려줘야 한다.",
-      "const schema = await invoke('/api/notion/schema');",
-      "if (schema.status !== 503) throw new Error('/api/notion/schema 상태 ' + schema.status);",
+      "const schema = await invoke('/api/notion-schema');",
+      "if (schema.status !== 503) throw new Error('/api/notion-schema 상태 ' + schema.status);",
       "if (JSON.parse(schema.body).code !== 'notion_not_configured') {",
       "  throw new Error('예상과 다른 오류 응답: ' + schema.body);",
       '}',
-      "console.log('   /api/notion/schema (토큰 없음) →', schema.body);",
+      "console.log('   /api/notion-schema (토큰 없음) →', schema.body);",
     ].join('\n'),
   );
 

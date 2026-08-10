@@ -447,6 +447,32 @@ describe('API 라우터', () => {
     expect(res.body).toMatchObject({ code: 'notion_not_configured', retryable: false });
   });
 
+  it('한 단계 경로(/notion-*)와 두 단계 경로(/notion/*)를 모두 받는다', async () => {
+    // 배포 환경에서 `/api/health`(한 단계)는 함수에 닿는데 `/api/notion/schema`
+    // (두 단계)는 404 로 샜다. 프론트는 한 단계 경로를 쓰고, 서버는 양쪽을 받는다.
+    const mock = realisticMock();
+    const deps = { env: envFor(mock), fetchImpl: mock.fetchImpl };
+
+    const flat = await handleApiRequest(req({ method: 'GET', path: '/notion-schema' }), deps);
+    const nested = await handleApiRequest(req({ method: 'GET', path: '/notion/schema' }), deps);
+
+    expect(flat.status).toBe(200);
+    expect(flat.body).toEqual(nested.body);
+
+    // 이름 자체에 하이픈이 든 경로도 잘리면 안 된다.
+    // (핸들러가 bad_request 를 돌려준다는 건 라우팅이 닿았다는 뜻 — 404 가 아니다)
+    const flatAdd = await handleApiRequest(
+      req({ method: 'POST', path: '/notion-add-properties', body: { fields: [] } }),
+      deps,
+    );
+    const nestedAdd = await handleApiRequest(
+      req({ method: 'POST', path: '/notion/add-properties', body: { fields: [] } }),
+      deps,
+    );
+    expect(flatAdd.body).toMatchObject({ code: 'bad_request' });
+    expect(flatAdd.status).toBe(nestedAdd.status);
+  });
+
   it('APP_ACCESS_KEY 가 설정되면 헤더 없이는 401', async () => {
     const mock = realisticMock();
     const env = envFor(mock, { APP_ACCESS_KEY: 's3cret' });

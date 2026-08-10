@@ -98,7 +98,14 @@ export async function handleApiRequest(req: ApiRequest, deps: RouterDeps): Promi
 
   if (req.method === 'OPTIONS') return { status: 204, headers: cors, body: null };
 
-  const path = req.path.replace(/\/+$/, '') || '/';
+  // 경로를 한 단계로 눌러서 받는다.
+  //
+  // 배포 환경에서 `/api/health`(한 단계)는 함수에 닿는데 `/api/notion/schema`
+  // (두 단계)는 닿지 않고 404/SPA fallback 으로 새는 일이 있었다. 호스팅의
+  // 캐치올 라우팅 동작에 기대지 않기 위해, 프론트는 `/notion-schema` 처럼
+  // 한 단계 경로로 호출한다. 아래에서 기존 두 단계 경로로 정규화하므로
+  // 라우팅 표는 그대로 두고 양쪽 형태를 모두 받는다.
+  const path = (req.path.replace(/\/+$/, '') || '/').replace(/^\/notion-/, '/notion/');
 
   // ---- /health : 시크릿 없이 접근 가능 (프론트가 백엔드 존재 여부를 감지) ----
   if (path === '/health' && req.method === 'GET') {

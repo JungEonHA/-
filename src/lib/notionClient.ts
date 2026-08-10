@@ -137,7 +137,7 @@ export interface SchemaResponse {
 }
 
 export function getSchema(config: ClientConfig): Promise<SchemaResponse> {
-  return call<SchemaResponse>(config, 'GET', '/notion/schema');
+  return call<SchemaResponse>(config, 'GET', '/notion-schema');
 }
 
 export interface UpsertResponse {
@@ -157,7 +157,7 @@ export function upsertRecord(
     knownPageId?: string | null;
   },
 ): Promise<UpsertResponse> {
-  return call<UpsertResponse>(config, 'POST', '/notion/upsert', {
+  return call<UpsertResponse>(config, 'POST', '/notion-upsert', {
     record: args.record,
     mapping: args.mapping,
     // 스키마를 함께 보내면 서버의 왕복 요청을 줄인다. 없으면 서버가 직접 읽는다.
@@ -174,5 +174,5 @@ export function addProperties(
   schema: DatabaseSchemaLite;
   suggestedMapping: Partial<Record<LogicalFieldKey, string>>;
 }> {
-  return call(config, 'POST', '/notion/add-properties', { fields });
+  return call(config, 'POST', '/notion-add-properties', { fields });
 }
