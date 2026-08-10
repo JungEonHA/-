@@ -102,7 +102,8 @@ export function HomePanel({ now }: { now: number }) {
         {today.resumeCount > 0 && (
           <p className="field__hint mt12" data-testid="resume-note">
             퇴근 후 {today.resumeCount}회 복귀 · 퇴근~복귀 사이{' '}
-            {formatDurationKo(today.pausedMs)}는 근무시간에서 제외했습니다.
+            {formatDurationKo(today.pausedMs)}
+            {eunNeun(formatDurationKo(today.pausedMs))} 근무시간에서 제외했습니다.
           </p>
         )}
       </Card>
@@ -134,6 +135,17 @@ export function HomePanel({ now }: { now: number }) {
       </Card>
     </div>
   );
+}
+
+/**
+ * 앞 단어의 받침에 맞는 조사(은/는)를 고른다.
+ * "1시간 15분" -> "은", "2시간" -> "은". 값에 따라 조사가 달라지므로 고정할 수 없다.
+ */
+function eunNeun(word: string): string {
+  const trimmed = word.trim();
+  const code = trimmed.charCodeAt(trimmed.length - 1);
+  if (code < 0xac00 || code > 0xd7a3) return '는'; // 한글이 아니면 기본값
+  return (code - 0xac00) % 28 === 0 ? '는' : '은';
 }
 
 function ActionButtons({ status }: { status: WorkStatus }) {
