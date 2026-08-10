@@ -27,6 +27,9 @@
   --warn-soft: #fdf1dc;
   --danger: #d64545;
   --danger-soft: #fdeaea;
+  /* 흰 글자를 얹는 솔리드 버튼 전용. --danger 는 텍스트/배너용이라 다크에서 밝아지므로
+     버튼 배경으로 쓰면 대비가 무너진다. */
+  --danger-solid: #d64545;
 
   --away: #7c5cff;
   --away-soft: #efeaff;
@@ -65,6 +68,7 @@
     --warn-soft: #2c2416;
     --danger: #ff8080;
     --danger-soft: #2e1b1b;
+    --danger-solid: #d93a40;
 
     --away: #a48cff;
     --away-soft: #241f3d;
@@ -317,7 +321,7 @@ button { font-family: inherit; }
 }
 .btn--primary:hover:not(:disabled) { background: var(--primary-strong); }
 
-.btn--danger { background: var(--danger); color: #fff; }
+.btn--danger { background: var(--danger-solid); color: #fff; }
 .btn--away { background: var(--away-soft); color: var(--away); border-color: transparent; }
 .btn--ghost {
   background: transparent;
@@ -544,7 +548,7 @@ button { font-family: inherit; }
   align-items: center;
   animation: toastIn 0.18s ease-out;
 }
-.toast--error { background: var(--danger); }
+.toast--error { background: var(--danger-solid); }
 .toast--success { background: var(--success); }
 
 .toast__close {
