@@ -146,6 +146,7 @@ export interface UpsertResponse {
   url?: string;
   skipped: Array<{ field: LogicalFieldKey; reason: string }>;
   duplicateWarning?: string;
+  foreignRowWarning?: string;
 }
 
 export function upsertRecord(

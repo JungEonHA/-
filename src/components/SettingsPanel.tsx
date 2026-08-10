@@ -26,6 +26,7 @@ export function SettingsPanel() {
 
   return (
     <div className="stack">
+      <EmployeeCard />
       <ConnectionCard />
 
       <Card
@@ -118,6 +119,12 @@ export function SettingsPanel() {
           </button>
         }
       >
+        {runtime.syncBlocked && (
+          <div style={{ marginBottom: 12 }}>
+            <Banner kind="danger">{runtime.syncBlocked}</Banner>
+          </div>
+        )}
+
         {runtime.backend !== 'ready' && outbox.length > 0 && (
           <div style={{ marginBottom: 12 }}>
             <Banner kind="info">
@@ -126,6 +133,8 @@ export function SettingsPanel() {
             </Banner>
           </div>
         )}
+
+        <LastSyncSummary />
 
         {outbox.length === 0 ? (
           <EmptyState>
@@ -157,15 +166,116 @@ export function SettingsPanel() {
             ))}
           </div>
         )}
+        <div className="btnRow mt12">
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            data-testid="btn-resync-today"
+            disabled={runtime.syncing || runtime.backend !== 'ready'}
+            onClick={() => store.resync(store.activeDate)}
+          >
+            오늘 기록 다시 보내기
+          </button>
+        </div>
+
         <p className="field__hint mt12">
           동기화가 실패해도 근무 기록은 이 기기에 그대로 남아 있습니다. 네트워크가 복구되면
-          자동으로 다시 시도하며, 같은 날짜는 항상 하나의 행으로 갱신됩니다.
+          자동으로 다시 시도하며, 같은 날짜·같은 직원은 항상 하나의 행으로 갱신됩니다. 매핑을 바꾼
+          뒤에는 “다시 보내기”로 그 날짜를 새 매핑에 맞춰 다시 기록할 수 있습니다.
         </p>
       </Card>
 
       <VacationConfigCard />
       <DataCard />
     </div>
+  );
+}
+
+/**
+ * 이 기기를 쓰는 직원을 정하는 카드.
+ *
+ * 근무 기록은 브라우저마다 따로 쌓이므로 "한 기기 = 한 사람"이 전제다.
+ * 선택지는 Notion `직원` Property 의 실제 옵션에서 그대로 가져온다 — 앱에 사람 이름을
+ * 하드코딩하면 직원이 바뀔 때마다 배포를 다시 해야 한다.
+ */
+function EmployeeCard() {
+  const store = useStore();
+  const { state } = useSnapshot();
+  const { employeeName, mapping, schema } = state.notion;
+  const [custom, setCustom] = useState(employeeName);
+
+  const employeeProp = mapping.employee
+    ? schema?.properties.find((p) => p.name === mapping.employee)
+    : undefined;
+  const options = employeeProp?.options ?? [];
+  const known = options.includes(employeeName);
+
+  return (
+    <Card title="직원" hint={employeeName || '미설정'}>
+      {!mapping.employee ? (
+        <Banner kind="warn">
+          <b>직원</b> 필드가 매핑되지 않았습니다. 아래 “Property 매핑”에서 Notion의 직원 Property를
+          지정하면, 여러 명이 같은 DB를 써도 서로의 기록을 덮어쓰지 않습니다.
+        </Banner>
+      ) : !employeeName ? (
+        <Banner kind="danger">
+          이 기기를 쓰는 사람을 선택해야 Notion에 기록됩니다. 누구의 기록인지 정하지 않으면 다른
+          직원 행과 섞일 수 있어 동기화를 멈춰 둡니다.
+        </Banner>
+      ) : (
+        <Banner kind="success">
+          이 기기의 기록은 <b>{employeeName}</b> 님의 것으로 저장됩니다.
+        </Banner>
+      )}
+
+      {options.length > 0 && (
+        <div className="field mt16">
+          <label className="field__label" htmlFor="employee-select">
+            직원 선택
+          </label>
+          <select
+            id="employee-select"
+            className="select"
+            data-testid="select-employee"
+            value={known ? employeeName : ''}
+            onChange={(e) => {
+              store.setEmployeeName(e.target.value);
+              setCustom(e.target.value);
+            }}
+          >
+            <option value="">— 선택 안 함 —</option>
+            {options.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+          <span className="field__hint">
+            Notion “{employeeProp?.name}” Property의 선택지입니다. 사람을 추가하려면 Notion에서 옵션을
+            먼저 만든 뒤 “스키마 다시 읽기”를 누르세요.
+          </span>
+        </div>
+      )}
+
+      <div className="field">
+        <label className="field__label" htmlFor="employee-name">
+          직접 입력
+        </label>
+        <input
+          id="employee-name"
+          className="input"
+          value={custom}
+          data-testid="input-employee"
+          placeholder="예: 정어리"
+          onChange={(e) => setCustom(e.target.value)}
+          onBlur={() => store.setEmployeeName(custom)}
+        />
+        <span className="field__hint">
+          기기를 다른 사람에게 넘길 때 이 값을 바꾸세요. 바꾸면 이전 사람의 Notion 행은 더 이상
+          갱신하지 않습니다.
+        </span>
+      </div>
+    </Card>
   );
 }
 
@@ -254,7 +364,9 @@ function ConnectionCard() {
           <div className="strong" style={{ fontSize: 13.5 }}>
             자동 동기화
           </div>
-          <div className="field__hint">퇴근 처리 및 휴가 변경 시 Notion에 자동 기록</div>
+          <div className="field__hint">
+            출근 · 자리 비움 · 복귀 · 퇴근 · 업무 복귀 · 휴가 변경 때마다 Notion에 자동 기록
+          </div>
         </div>
         <input
           type="checkbox"
@@ -264,6 +376,42 @@ function ConnectionCard() {
         />
       </div>
     </Card>
+  );
+}
+
+/**
+ * 마지막 동기화가 "무엇을" 했는지 보여준다.
+ *
+ * 시각만 남기면 사용자는 Notion을 직접 열어 보기 전까지 진짜 갔는지 알 수 없다.
+ * 어느 날짜·누구 기록을, 새로 만들었는지 갱신했는지, 그리고 그 행으로 가는 링크까지 남긴다.
+ */
+function LastSyncSummary() {
+  const { state } = useSnapshot();
+  const last = state.lastSync;
+  if (!last) return null;
+
+  return (
+    <div className="mt12" data-testid="last-sync">
+      <Banner kind={last.warning ? 'warn' : 'success'}>
+        {formatClockSeconds(last.at)} · {formatDateKeyKo(last.dateKey)}
+        {last.employeeName ? ` · ${last.employeeName}` : ''} 기록을{' '}
+        {last.action === 'created' ? '새로 만들었습니다' : '갱신했습니다'}.
+        {last.pageUrl && (
+          <>
+            {' '}
+            <a href={last.pageUrl} target="_blank" rel="noreferrer">
+              Notion에서 열기
+            </a>
+          </>
+        )}
+        {last.warning && (
+          <>
+            <br />
+            {last.warning}
+          </>
+        )}
+      </Banner>
+    </div>
   );
 }
 

@@ -33,6 +33,7 @@ function realisticMock() {
       '상태': { id: 'p9', type: 'select', options: ['퇴근 완료', '근무 중'] },
       '메모': { id: 'p10', type: 'rich_text' },
       '담당자': { id: 'p11', type: 'people' },
+      '직원': { id: 'p12', type: 'select', options: ['정어리', '박진규'] },
     },
   });
 }
@@ -94,6 +95,7 @@ describe('스키마 조회와 매핑 제안', () => {
     expect(mapping.clockIn).toBe('출근 시각');
     expect(mapping.clockOut).toBe('퇴근 시각');
     expect(mapping.status).toBe('상태');
+    expect(mapping.employee).toBe('직원');
   });
 
   it('같은 Property 를 두 필드에 중복 배정하지 않는다', async () => {
@@ -187,6 +189,21 @@ describe('중복 방지 upsert', () => {
     mock = realisticMock();
   });
 
+  /** Notion 에서 사람이 직접 만든 행을 흉내 낸다 (앱 제목 규칙과 다른 제목) */
+  function manualRow(id: string, title: string, createdMs: number, employee?: string) {
+    mock.pages.push({
+      id,
+      created_time: new Date(createdMs).toISOString(),
+      archived: false,
+      properties: {
+        '기록명': { title: [{ type: 'text', text: { content: title } }] },
+        '근무 일자': { date: { start: '2026-08-10' } },
+        ...(employee ? { 직원: { select: { name: employee } } } : {}),
+      },
+      url: `https://notion.so/${id}`,
+    });
+  }
+
   async function upsert(record: DayRecordPayload, knownPageId?: string | null) {
     const client = makeClient(mock);
     const schema = await fetchDatabaseSchema(client, DB_ID);
@@ -261,22 +278,41 @@ describe('중복 방지 upsert', () => {
     expect(mock.read(created.pageId)['실 근무시간']).toBe(6);
   });
 
-  it('같은 날짜 행이 여러 개면 가장 오래된 것만 갱신하고 나머지는 건드리지 않는다', async () => {
-    await upsert(RECORD);
-    // Notion 쪽에서 수동으로 같은 날짜 행이 하나 더 생긴 상황
+  it('사용자가 손으로 만든 같은 날짜 행은 절대 건드리지 않는다', async () => {
+    // 실제로 있었던 사고: 날짜만 맞으면 가장 오래된 행을 갱신하는 바람에
+    // 사용자가 적어 둔 "반차" 행의 제목·구분이 통째로 덮어써졌다.
+    manualRow('dddd0000000000000000000000000002', '반차', 1_600_000_000_000);
+
+    const res = await upsert({ ...RECORD, actualHours: 5 });
+
+    expect(res.action).toBe('created'); // 남의 행을 갱신하지 않고 새로 만든다
+    expect(res.foreignRowWarning).toContain('1개');
+    expect(mock.pages).toHaveLength(2);
+    expect(mock.read('dddd0000000000000000000000000002')).toEqual({
+      '기록명': '반차',
+      '근무 일자': '2026-08-10',
+    });
+  });
+
+  it('앱이 만든 행이 여러 개면 가장 오래된 것만 갱신한다', async () => {
+    const first = await upsert(RECORD);
+    // 다른 기기에서 동시에 만들어졌다고 가정 (제목이 같으므로 앱 소유)
     mock.pages.push({
-      id: 'dddd0000000000000000000000000002',
-      created_time: new Date(1_800_000_000_000).toISOString(),
+      id: 'dddd0000000000000000000000000003',
+      created_time: new Date(1_900_000_000_000).toISOString(),
       archived: false,
-      properties: { '근무 일자': { date: { start: '2026-08-10' } } },
+      properties: {
+        '기록명': { title: [{ type: 'text', text: { content: '2026-08-10 근무기록' } }] },
+        '근무 일자': { date: { start: '2026-08-10' } },
+      },
       url: 'https://notion.so/dup',
     });
 
     const res = await upsert({ ...RECORD, actualHours: 5 });
     expect(res.duplicateWarning).toContain('2개');
+    expect(res.pageId).toBe(first.pageId);
     expect(mock.pages).toHaveLength(2); // 삭제하지 않는다
-    expect(mock.read(res.pageId)['실 근무시간']).toBe(5);
-    expect(mock.read('dddd0000000000000000000000000002')['실 근무시간']).toBeUndefined();
+    expect(mock.read('dddd0000000000000000000000000003')['실 근무시간']).toBeUndefined();
   });
 
   it('아카이브된 행은 무시하고 새로 만든다', async () => {
@@ -293,6 +329,41 @@ describe('중복 방지 upsert', () => {
     await upsert({ ...RECORD, actualHours: 3 });
     expect(mock.calls.some((c) => c.method === 'DELETE')).toBe(false);
     expect(mock.calls.some((c) => c.body?.archived === true)).toBe(false);
+  });
+
+  it('직원이 다르면 같은 날짜라도 각자의 행을 갖는다', async () => {
+    const a = await upsert({ ...RECORD, employeeName: '정어리' });
+    const b = await upsert({ ...RECORD, employeeName: '박진규', actualHours: 4 });
+
+    expect(a.action).toBe('created');
+    expect(b.action).toBe('created');
+    expect(b.pageId).not.toBe(a.pageId);
+    expect(mock.pages).toHaveLength(2);
+    expect(mock.read(a.pageId)['직원']).toBe('정어리');
+    expect(mock.read(b.pageId)['직원']).toBe('박진규');
+    expect(mock.read(a.pageId)['실 근무시간']).toBe(8); // 서로 덮어쓰지 않았다
+    expect(mock.read(b.pageId)['실 근무시간']).toBe(4);
+  });
+
+  it('같은 직원의 같은 날짜는 계속 한 행으로 갱신된다', async () => {
+    const first = await upsert({ ...RECORD, employeeName: '정어리' });
+    const second = await upsert({ ...RECORD, employeeName: '정어리', actualHours: 9 });
+
+    expect(second.action).toBe('updated');
+    expect(second.pageId).toBe(first.pageId);
+    expect(mock.pages).toHaveLength(1);
+    expect(mock.read(first.pageId)['실 근무시간']).toBe(9);
+  });
+
+  it('다른 직원이 손으로 만든 행에는 손대지 않는다', async () => {
+    manualRow('dddd0000000000000000000000000009', '박진규 반차', 1_600_000_000_000, '박진규');
+
+    const res = await upsert({ ...RECORD, employeeName: '정어리' });
+
+    expect(res.action).toBe('created');
+    // 직원 필터가 걸리므로 애초에 조회 결과에도 잡히지 않는다
+    expect(res.foreignRowWarning).toBeUndefined();
+    expect(mock.read('dddd0000000000000000000000000009')['기록명']).toBe('박진규 반차');
   });
 
   it('쓸 수 있는 Property 가 하나도 없으면 명확히 실패한다', async () => {
@@ -381,20 +452,39 @@ describe('Property 추가 (opt-in)', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(mock.properties['휴가시간']?.type).toBe('number');
-    expect(mock.properties['인정 근무시간']?.type).toBe('number');
+    expect(mock.properties['휴가사용시간']?.type).toBe('number');
+    expect(mock.properties['인정근무시간']?.type).toBe('number');
     expect(mock.properties['날짜']).toEqual({ id: 'p2', type: 'date' }); // 그대로
   });
 
-  it('이름이 겹치면 추가하지 않는다', async () => {
+  it('직원 Property 도 만들어 준다 (여러 명이 쓰는 DB 의 전제)', async () => {
+    const mock = new NotionMock({
+      databaseId: DB_ID,
+      properties: { 이름: { id: 'p1', type: 'title' }, 날짜: { id: 'p2', type: 'date' } },
+    });
+
+    await handleApiRequest(
+      {
+        method: 'POST',
+        path: '/notion/add-properties',
+        query: {},
+        headers: {},
+        body: { fields: ['employee'] },
+      },
+      { env: envFor(mock), fetchImpl: mock.fetchImpl, sleep: async () => {} },
+    );
+
+    expect(mock.properties['직원']?.type).toBe('select');
+  });
+
+  it('이름이 겹치면 기존 것을 건드리지 않고 다른 이름으로 만든다', async () => {
     const mock = new NotionMock({
       databaseId: DB_ID,
       properties: {
         이름: { id: 'p1', type: 'title' },
-        휴가시간: { id: 'p2', type: 'rich_text' },
+        휴가사용시간: { id: 'p2', type: 'rich_text' },
       },
     });
-    const before = { ...mock.properties };
 
     await handleApiRequest(
       {
@@ -407,7 +497,10 @@ describe('Property 추가 (opt-in)', () => {
       { env: envFor(mock), fetchImpl: mock.fetchImpl, sleep: async () => {} },
     );
 
-    expect(mock.properties).toEqual(before);
+    // 기존 Property 는 타입까지 그대로
+    expect(mock.properties['휴가사용시간']).toEqual({ id: 'p2', type: 'rich_text' });
+    // 그리고 실제로 쓸 수 있는 새 Property 가 생겼다 (예전에는 조용히 아무것도 안 생겼다)
+    expect(mock.properties['휴가사용시간 (2)']?.type).toBe('number');
   });
 });
 

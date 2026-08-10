@@ -14,7 +14,7 @@
 
 import { DAY_MS, toDateKey } from './time';
 
-export type WorkEventType = 'clock_in' | 'away_start' | 'away_end' | 'clock_out';
+export type WorkEventType = 'clock_in' | 'away_start' | 'away_end' | 'clock_out' | 'resume';
 
 export interface WorkEvent {
   type: WorkEventType;
@@ -56,6 +56,13 @@ export interface DayTotals {
   creditedMs: number;
   /** 자리 비움 횟수 */
   awayCount: number;
+  /** 퇴근 후 업무에 복귀한 횟수 */
+  resumeCount: number;
+  /**
+   * 퇴근 ~ 업무 복귀 사이의 누적시간.
+   * 근무시간도 자리 비움시간도 아니다 — "퇴근한 상태였던 시간"이므로 어디에도 합산하지 않는다.
+   */
+  pausedMs: number;
   /** 아직 진행 중인 구간이 있는지 (working | away) */
   isLive: boolean;
 }
@@ -79,6 +86,8 @@ export function computeDay(log: DayLog, now: number): DayTotals {
   let actualMs = 0;
   let awayMs = 0;
   let awayCount = 0;
+  let resumeCount = 0;
+  let pausedMs = 0;
   let clockInAt: number | null = null;
   let clockOutAt: number | null = null;
 
@@ -118,6 +127,17 @@ export function computeDay(log: DayLog, now: number): DayTotals {
         openKind = null;
         break;
       }
+      case 'resume': {
+        // 퇴근을 잘못 눌렀거나 다시 일하게 된 경우. 퇴근 상태가 아니면 의미가 없다.
+        if (clockOutAt === null) break;
+        // 퇴근~복귀 사이는 근무도 자리 비움도 아니므로 별도로만 센다.
+        pausedMs += Math.max(0, ev.at - clockOutAt);
+        clockOutAt = null;
+        openKind = 'work';
+        openSince = ev.at;
+        resumeCount += 1;
+        break;
+      }
     }
   }
 
@@ -146,6 +166,8 @@ export function computeDay(log: DayLog, now: number): DayTotals {
     vacationMs,
     creditedMs: actualMs + vacationMs,
     awayCount,
+    resumeCount,
+    pausedMs,
     isLive: openKind !== null,
   };
 }
@@ -160,7 +182,7 @@ export function isStaleSession(totals: DayTotals, now: number): boolean {
 // 상태 전이
 // ---------------------------------------------------------------------------
 
-export type ActionKind = 'clock_in' | 'away_start' | 'away_end' | 'clock_out';
+export type ActionKind = 'clock_in' | 'away_start' | 'away_end' | 'clock_out' | 'resume';
 
 export interface TransitionOk {
   ok: true;
@@ -177,6 +199,7 @@ const ALLOWED_FROM: Record<ActionKind, WorkStatus[]> = {
   away_start: ['working'],
   away_end: ['away'],
   clock_out: ['working', 'away'],
+  resume: ['finished'],
 };
 
 const ACTION_LABEL_KO: Record<ActionKind, string> = {
@@ -184,6 +207,7 @@ const ACTION_LABEL_KO: Record<ActionKind, string> = {
   away_start: '자리 비움',
   away_end: '복귀',
   clock_out: '퇴근',
+  resume: '업무 복귀',
 };
 
 /**

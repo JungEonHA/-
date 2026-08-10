@@ -180,11 +180,19 @@ function decode(raw: any): unknown {
 
 function matchesFilter(page: MockPage, filter: any): boolean {
   if (!filter) return true;
+  if (Array.isArray(filter.and)) return filter.and.every((f: any) => matchesFilter(page, f));
+  if (Array.isArray(filter.or)) return filter.or.some((f: any) => matchesFilter(page, f));
+
   const raw = page.properties[filter.property];
   if (!raw) return false;
   if (filter.date?.equals !== undefined) return (raw.date?.start ?? null) === filter.date.equals;
   if (filter.rich_text?.equals !== undefined) return decode(raw) === filter.rich_text.equals;
   if (filter.title?.equals !== undefined) return decode(raw) === filter.title.equals;
+  if (filter.select?.equals !== undefined) return (raw.select?.name ?? null) === filter.select.equals;
+  if (filter.status?.equals !== undefined) return (raw.status?.name ?? null) === filter.status.equals;
+  if (filter.multi_select?.contains !== undefined) {
+    return (raw.multi_select ?? []).some((o: any) => o?.name === filter.multi_select.contains);
+  }
   return false;
 }
 

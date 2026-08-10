@@ -8,6 +8,8 @@ import { formatClock, msToHours, toKstIso } from './time';
 
 export interface DayRecordPayload {
   date: string;
+  /** 이 기록의 주인. 여러 명이 같은 DB를 쓸 때 행을 가르는 두 번째 기준. */
+  employeeName: string | null;
   clockInIso: string | null;
   clockOutIso: string | null;
   clockInText: string | null;
@@ -28,9 +30,10 @@ export function notionStatusText(totals: DayTotals): string {
   return totals.vacationMs > 0 ? '휴가' : '출근 전';
 }
 
-export function buildRecord(totals: DayTotals): DayRecordPayload {
+export function buildRecord(totals: DayTotals, employeeName: string | null = null): DayRecordPayload {
   return {
     date: totals.date,
+    employeeName: employeeName?.trim() ? employeeName.trim() : null,
     clockInIso: totals.clockInAt === null ? null : toKstIso(totals.clockInAt),
     clockOutIso: totals.clockOutAt === null ? null : toKstIso(totals.clockOutAt),
     clockInText: totals.clockInAt === null ? null : formatClock(totals.clockInAt),

@@ -37,7 +37,7 @@ export function HomePanel({ now }: { now: number }) {
   const caption =
     today.status === 'not_started' ? '출근 버튼을 누르면 근무시간이 시작됩니다'
       : today.status === 'away' ? '자리 비움 중 — 근무시간이 멈춰 있습니다'
-        : today.status === 'finished' ? '오늘 근무가 확정되었습니다'
+        : today.status === 'finished' ? '오늘 근무가 확정되었습니다 — 필요하면 업무에 복귀할 수 있습니다'
           : '실시간 근무시간이 측정되고 있습니다';
 
   return (
@@ -99,6 +99,12 @@ export function HomePanel({ now }: { now: number }) {
           />
           <Tile label="자리 비움" value={formatDurationKo(today.awayMs)} />
         </div>
+        {today.resumeCount > 0 && (
+          <p className="field__hint mt12" data-testid="resume-note">
+            퇴근 후 {today.resumeCount}회 복귀 · 퇴근~복귀 사이{' '}
+            {formatDurationKo(today.pausedMs)}는 근무시간에서 제외했습니다.
+          </p>
+        )}
       </Card>
 
       <div className="grid-2">
@@ -146,11 +152,27 @@ function ActionButtons({ status }: { status: WorkStatus }) {
     );
   }
 
+  // 퇴근 뒤에도 되돌릴 수 있어야 한다. 퇴근 버튼을 잘못 눌렀거나, 일이 남아
+  // 다시 자리에 앉는 일이 실제로 흔하다. 복귀하면 근무시간이 이어서 누적된다.
   if (status === 'finished') {
     return (
-      <button type="button" className="btn btn--block btn--lg" disabled data-testid="btn-finished">
-        오늘 근무 완료
-      </button>
+      <div className="stack">
+        <button type="button" className="btn btn--block btn--lg" disabled data-testid="btn-finished">
+          오늘 근무 완료
+        </button>
+        <button
+          type="button"
+          className="btn btn--primary btn--block btn--lg"
+          data-testid="btn-resume"
+          onClick={() => store.perform('resume')}
+        >
+          업무 복귀하기
+        </button>
+        <p className="field__hint">
+          퇴근을 잘못 눌렀거나 일을 더 하게 됐다면 누르세요. 지금부터 근무시간이 다시 쌓입니다.
+          퇴근~복귀 사이 시간은 근무시간에 포함되지 않습니다.
+        </p>
+      </div>
     );
   }
 

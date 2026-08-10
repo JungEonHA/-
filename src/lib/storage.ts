@@ -34,16 +34,34 @@ export interface DatabaseSchemaLite {
 export type LogicalFieldKey = LogicalField;
 
 export interface NotionSettings {
-  /** 퇴근/휴가변경 시 자동 동기화 여부 */
+  /** 근무 상태가 바뀔 때마다 자동 동기화할지 여부 */
   autoSync: boolean;
   /** 백엔드 주소. 빈 문자열이면 같은 오리진의 /api 를 사용 */
   apiBase: string;
   /** 서버가 APP_ACCESS_KEY 를 요구할 때 보낼 값 */
   accessKey: string;
+  /**
+   * 이 기기를 쓰는 직원 이름 (Notion `직원` Property 값).
+   *
+   * 기록은 브라우저마다 따로 쌓이므로 "한 기기 = 한 사람"이 전제다.
+   * 이 값이 날짜와 함께 Notion 행을 가르는 기준이 된다.
+   */
+  employeeName: string;
   mapping: Partial<Record<LogicalFieldKey, string>>;
   schema: DatabaseSchemaLite | null;
   /** dateKey -> Notion page id (중복 생성 방지 빠른 경로) */
   pageIds: Record<string, string>;
+}
+
+/** 마지막으로 성공한 동기화의 결과. "정말 갔는지" 확인할 수 있게 남긴다. */
+export interface LastSyncInfo {
+  at: number;
+  dateKey: string;
+  employeeName: string | null;
+  action: 'created' | 'updated';
+  pageUrl: string | null;
+  /** 기존 수동 행을 건드리지 않고 비켜 갔을 때의 안내 */
+  warning: string | null;
 }
 
 export interface OutboxEntry {
@@ -62,6 +80,7 @@ export interface AppState {
   notion: NotionSettings;
   outbox: Record<string, OutboxEntry>;
   lastSyncAt: number | null;
+  lastSync: LastSyncInfo | null;
 }
 
 export function createInitialState(now: number): AppState {
@@ -73,12 +92,14 @@ export function createInitialState(now: number): AppState {
       autoSync: true,
       apiBase: '',
       accessKey: '',
+      employeeName: '',
       mapping: {},
       schema: null,
       pageIds: {},
     },
     outbox: {},
     lastSyncAt: null,
+    lastSync: null,
   };
 }
 
@@ -146,7 +167,9 @@ export function normalizeState(raw: unknown, now: number): AppState {
               !!e &&
               typeof (e as any).at === 'number' &&
               Number.isFinite((e as any).at) &&
-              ['clock_in', 'away_start', 'away_end', 'clock_out'].includes((e as any).type),
+              ['clock_in', 'away_start', 'away_end', 'clock_out', 'resume'].includes(
+                (e as any).type,
+              ),
           )
           .map((e) => ({ type: e.type, at: e.at }))
           .sort((a, b) => a.at - b.at)
@@ -180,6 +203,7 @@ export function normalizeState(raw: unknown, now: number): AppState {
     autoSync: typeof n.autoSync === 'boolean' ? n.autoSync : true,
     apiBase: typeof n.apiBase === 'string' ? n.apiBase : '',
     accessKey: typeof n.accessKey === 'string' ? n.accessKey : '',
+    employeeName: typeof n.employeeName === 'string' ? n.employeeName : '',
     mapping: n.mapping && typeof n.mapping === 'object' ? { ...n.mapping } : {},
     schema: n.schema && typeof n.schema === 'object' ? n.schema : null,
     pageIds: n.pageIds && typeof n.pageIds === 'object' ? { ...n.pageIds } : {},
@@ -198,6 +222,19 @@ export function normalizeState(raw: unknown, now: number): AppState {
     };
   }
 
+  const ls = obj.lastSync;
+  const lastSync: LastSyncInfo | null =
+    ls && typeof ls === 'object' && typeof ls.at === 'number' && typeof ls.dateKey === 'string'
+      ? {
+          at: ls.at,
+          dateKey: ls.dateKey,
+          employeeName: typeof ls.employeeName === 'string' ? ls.employeeName : null,
+          action: ls.action === 'created' ? 'created' : 'updated',
+          pageUrl: typeof ls.pageUrl === 'string' ? ls.pageUrl : null,
+          warning: typeof ls.warning === 'string' ? ls.warning : null,
+        }
+      : null;
+
   return {
     version: 1,
     logs,
@@ -205,6 +242,7 @@ export function normalizeState(raw: unknown, now: number): AppState {
     notion,
     outbox,
     lastSyncAt: typeof obj.lastSyncAt === 'number' ? obj.lastSyncAt : null,
+    lastSync,
   };
 }
 

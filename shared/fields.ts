@@ -9,6 +9,7 @@
 export type LogicalField =
   | 'title'
   | 'date'
+  | 'employee'
   | 'clockIn'
   | 'clockOut'
   | 'actualWork'
@@ -18,7 +19,7 @@ export type LogicalField =
   | 'status';
 
 /** 값의 성격. 어떤 Notion 타입에 어떻게 인코딩할지 결정한다. */
-export type FieldKind = 'dateOnly' | 'timestamp' | 'duration' | 'status' | 'text';
+export type FieldKind = 'dateOnly' | 'timestamp' | 'duration' | 'status' | 'employee' | 'text';
 
 export interface FieldSpec {
   key: LogicalField;
@@ -30,6 +31,13 @@ export interface FieldSpec {
   candidates: string[];
   /** 자동 생성 시 만들 Notion property 타입 */
   createAs: string;
+  /**
+   * 자동 생성 시 쓸 Property 이름. 생략하면 labelKo 를 쓴다.
+   *
+   * labelKo 는 앱 UI 용 문구라서 그대로 DB 컬럼명이 되면 어색하거나("실제 근무시간"),
+   * 기존 컬럼과 뜻이 겹쳐 헷갈린다. DB 에 만들 이름은 따로 정한다.
+   */
+  createName?: string;
   /** 이 필드가 없으면 동기화 자체가 불가능한가 */
   required: boolean;
   descriptionKo: string;
@@ -55,6 +63,18 @@ export const FIELD_SPECS: FieldSpec[] = [
     createAs: 'date',
     required: true,
     descriptionKo: '중복 기록 방지의 기준이 되는 필드입니다. 반드시 매핑해야 합니다.',
+  },
+  {
+    key: 'employee',
+    labelKo: '직원',
+    kind: 'employee',
+    acceptedTypes: ['select', 'status', 'multi_select', 'rich_text'],
+    candidates: ['직원', '사원', '담당자', '작성자', '멤버', 'employee', 'member', 'person', 'staff', 'user'],
+    createAs: 'select',
+    createName: '직원',
+    required: true,
+    descriptionKo:
+      '여러 명이 같은 DB를 쓸 때 누구의 기록인지 구분합니다. 날짜와 함께 중복 방지 기준이 됩니다.',
   },
   {
     key: 'clockIn',
@@ -86,6 +106,7 @@ export const FIELD_SPECS: FieldSpec[] = [
       'actualwork', 'workhours', 'worktime', 'actualhours',
     ],
     createAs: 'number',
+    createName: '실근무시간',
     required: false,
     descriptionKo: '자리 비움을 제외한 순수 근무시간 (숫자면 시간 단위 소수).',
   },
@@ -99,6 +120,7 @@ export const FIELD_SPECS: FieldSpec[] = [
       'awaytime', 'away', 'breaktime', 'break',
     ],
     createAs: 'number',
+    createName: '자리비움시간',
     required: false,
     descriptionKo: '근무시간에 포함되지 않은 자리 비움 누적시간.',
   },
@@ -109,6 +131,7 @@ export const FIELD_SPECS: FieldSpec[] = [
     acceptedTypes: ['number', 'rich_text'],
     candidates: ['휴가시간', '휴가', '연차시간', '휴가사용', 'vacation', 'leave', 'pto', 'timeoff'],
     createAs: 'number',
+    createName: '휴가사용시간',
     required: false,
     descriptionKo: '해당 일자에 사용한 휴가시간.',
   },
@@ -122,6 +145,7 @@ export const FIELD_SPECS: FieldSpec[] = [
       'creditedwork', 'creditedhours', 'totalhours', 'recognizedhours',
     ],
     createAs: 'number',
+    createName: '인정근무시간',
     required: false,
     descriptionKo: '실제 근무시간 + 휴가 대체시간.',
   },
@@ -130,8 +154,9 @@ export const FIELD_SPECS: FieldSpec[] = [
     labelKo: '상태',
     kind: 'status',
     acceptedTypes: ['select', 'status', 'rich_text'],
-    candidates: ['상태', '근무상태', '구분', 'status', 'state', 'type'],
+    candidates: ['근무상태', '상태', 'status', 'state'],
     createAs: 'select',
+    createName: '근무상태',
     required: false,
     descriptionKo: '퇴근 완료 / 근무 중 / 자리 비움 / 휴가 / 출근 전.',
   },
@@ -143,3 +168,68 @@ export const FIELD_SPEC_BY_KEY: Record<LogicalField, FieldSpec> = Object.fromEnt
 
 /** 논리 필드 -> 실제 Notion property 이름. 값이 없으면 "이 필드는 쓰지 않음". */
 export type FieldMapping = Partial<Record<LogicalField, string>>;
+
+// ---------------------------------------------------------------------------
+// 매핑 제안
+// ---------------------------------------------------------------------------
+
+/** 매핑 제안에 필요한 최소한의 Property 정보 (서버/클라이언트 공통) */
+export interface PropertyLike {
+  name: string;
+  type: string;
+}
+
+function normalizeName(s: string): string {
+  return s.toLowerCase().replace(/[\s_\-()[\]/·.]/g, '');
+}
+
+/**
+ * 실제 스키마를 보고 매핑을 **제안**한다. 확정은 사용자가 UI 에서 한다.
+ * 이름이 정확히/부분적으로 일치하고 타입까지 호환될 때만 제안한다.
+ *
+ * 서버(스키마 조회 응답)와 클라이언트(캐시된 스키마로 빈 칸 보정)가 같은 규칙을
+ * 써야 하므로 여기 공유 모듈에 둔다.
+ */
+export function suggestMapping(properties: PropertyLike[]): {
+  mapping: FieldMapping;
+  unmatched: LogicalField[];
+} {
+  const mapping: FieldMapping = {};
+  const unmatched: LogicalField[] = [];
+  const taken = new Set<string>();
+
+  // title 타입은 DB 당 하나뿐이므로 먼저 확정한다.
+  const titleProp = properties.find((p) => p.type === 'title');
+  if (titleProp) {
+    mapping.title = titleProp.name;
+    taken.add(titleProp.name);
+  }
+
+  for (const spec of FIELD_SPECS) {
+    if (spec.key === 'title') continue;
+
+    const compatible = properties.filter(
+      (p) => spec.acceptedTypes.includes(p.type) && !taken.has(p.name),
+    );
+    if (compatible.length === 0) {
+      unmatched.push(spec.key);
+      continue;
+    }
+
+    const exact = compatible.find((p) => spec.candidates.includes(normalizeName(p.name)));
+    const partial = compatible.find((p) => {
+      const n = normalizeName(p.name);
+      return spec.candidates.some((c) => n.includes(c) || c.includes(n));
+    });
+
+    const chosen = exact ?? partial;
+    if (chosen) {
+      mapping[spec.key] = chosen.name;
+      taken.add(chosen.name);
+    } else {
+      unmatched.push(spec.key);
+    }
+  }
+
+  return { mapping, unmatched };
+}

@@ -272,6 +272,19 @@ function shallowDecode(properties: Record<string, any> = {}): Record<string, unk
       case 'select': out[name] = raw.select?.name ?? null; break;
       case 'status': out[name] = raw.status?.name ?? null; break;
       case 'checkbox': out[name] = raw.checkbox; break;
+      case 'multi_select':
+        out[name] = (raw.multi_select ?? []).map((o: any) => o?.name ?? '').filter(Boolean);
+        break;
+      case 'formula': {
+        const f = raw.formula ?? {};
+        out[name] =
+          f.type === 'number' ? f.number
+            : f.type === 'string' ? f.string
+              : f.type === 'boolean' ? f.boolean
+                : f.type === 'date' ? (f.date?.start ?? null)
+                  : null;
+        break;
+      }
       default: out[name] = null;
     }
   }

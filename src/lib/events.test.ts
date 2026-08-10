@@ -211,6 +211,95 @@ describe('상태 전이 검증', () => {
   });
 });
 
+describe('퇴근 취소 / 업무 복귀', () => {
+  it('퇴근을 잘못 눌러도 복귀하면 근무시간이 이어서 쌓인다', () => {
+    const log = run([
+      ['clock_in', '09:00'],
+      ['clock_out', '12:00'],
+      ['resume', '12:05'],
+    ]);
+    const totals = computeDay(log, at('14:05'));
+
+    expect(totals.status).toBe('working');
+    expect(totals.clockOutAt).toBeNull();
+    // 09:00~12:00 (3h) + 12:05~14:05 (2h)
+    expect(totals.actualMs).toBe(5 * HOUR_MS);
+    expect(totals.resumeCount).toBe(1);
+    expect(totals.isLive).toBe(true);
+  });
+
+  it('퇴근~복귀 사이는 근무시간에도 자리 비움에도 넣지 않는다', () => {
+    const log = run([
+      ['clock_in', '09:00'],
+      ['clock_out', '12:00'],
+      ['resume', '15:00'],
+      ['clock_out', '16:00'],
+    ]);
+    const totals = computeDay(log, at('23:00'));
+
+    expect(totals.actualMs).toBe(4 * HOUR_MS); // 3h + 1h
+    expect(totals.awayMs).toBe(0);
+    expect(totals.pausedMs).toBe(3 * HOUR_MS);
+    expect(totals.status).toBe('finished');
+  });
+
+  it('복귀 후 다시 퇴근하면 마지막 퇴근 시각이 남고 출근 시각은 처음 것이다', () => {
+    const log = run([
+      ['clock_in', '09:00'],
+      ['clock_out', '12:00'],
+      ['resume', '13:00'],
+      ['clock_out', '18:00'],
+    ]);
+    const totals = computeDay(log, at('23:00'));
+
+    expect(totals.clockInAt).toBe(at('09:00'));
+    expect(totals.clockOutAt).toBe(at('18:00'));
+  });
+
+  it('복귀 후 자리 비움도 정상 동작한다', () => {
+    const log = run([
+      ['clock_in', '09:00'],
+      ['clock_out', '12:00'],
+      ['resume', '13:00'],
+      ['away_start', '14:00'],
+      ['away_end', '15:00'],
+      ['clock_out', '18:00'],
+    ]);
+    const totals = computeDay(log, at('23:00'));
+
+    expect(totals.actualMs).toBe(3 * HOUR_MS + 1 * HOUR_MS + 3 * HOUR_MS);
+    expect(totals.awayMs).toBe(1 * HOUR_MS);
+    expect(totals.pausedMs).toBe(1 * HOUR_MS);
+  });
+
+  it('퇴근하지 않은 상태에서는 복귀할 수 없다', () => {
+    const log = run([['clock_in', '09:00']]);
+    const res = applyAction(log, 'resume', at('10:00'));
+    expect(res.ok).toBe(false);
+  });
+
+  it('출근 전에는 복귀할 수 없다', () => {
+    const res = applyAction(emptyDayLog('2026-08-10'), 'resume', at('10:00'));
+    expect(res.ok).toBe(false);
+  });
+
+  it('여러 번 퇴근/복귀를 반복해도 누적이 어긋나지 않는다', () => {
+    const log = run([
+      ['clock_in', '09:00'],
+      ['clock_out', '10:00'],
+      ['resume', '11:00'],
+      ['clock_out', '12:00'],
+      ['resume', '13:00'],
+      ['clock_out', '14:00'],
+    ]);
+    const totals = computeDay(log, at('23:00'));
+
+    expect(totals.actualMs).toBe(3 * HOUR_MS);
+    expect(totals.pausedMs).toBe(2 * HOUR_MS);
+    expect(totals.resumeCount).toBe(2);
+  });
+});
+
 describe('활성 근무일 / 장시간 세션', () => {
   it('자정을 넘겨 근무 중이면 출근한 날짜가 활성 근무일이다', () => {
     const log = run([['clock_in', '22:00']], '2026-08-10');

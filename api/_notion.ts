@@ -24,6 +24,7 @@ import {
 export {
   FIELD_SPECS,
   FIELD_SPEC_BY_KEY,
+  suggestMapping,
   type FieldKind,
   type FieldMapping,
   type LogicalField,
@@ -39,6 +40,8 @@ const NOTION_BASE = 'https://api.notion.com/v1';
 export interface DayRecordPayload {
   /** KST "YYYY-MM-DD" */
   date: string;
+  /** 이 기록의 주인. 날짜와 함께 행을 가르는 기준. 미설정이면 null */
+  employeeName?: string | null;
   /** ISO8601 (+09:00). 미출근이면 null */
   clockInIso: string | null;
   clockOutIso: string | null;
@@ -232,58 +235,6 @@ export function normalizeId(raw: string): string {
   throw new NotionError(`잘못된 Notion ID: "${raw}"`, 400, 'invalid_id', false);
 }
 
-function normalizeName(s: string): string {
-  return s.toLowerCase().replace(/[\s_\-()[\]/·.]/g, '');
-}
-
-/**
- * 실제 스키마를 보고 매핑을 **제안**한다. 확정은 사용자가 UI 에서 한다.
- * 이름이 정확히/부분적으로 일치하고 타입까지 호환될 때만 제안한다.
- */
-export function suggestMapping(properties: NotionPropertyInfo[]): {
-  mapping: FieldMapping;
-  unmatched: LogicalField[];
-} {
-  const mapping: FieldMapping = {};
-  const unmatched: LogicalField[] = [];
-  const taken = new Set<string>();
-
-  // title 타입은 DB 당 하나뿐이므로 먼저 확정한다.
-  const titleProp = properties.find((p) => p.type === 'title');
-  if (titleProp) {
-    mapping.title = titleProp.name;
-    taken.add(titleProp.name);
-  }
-
-  for (const spec of FIELD_SPECS) {
-    if (spec.key === 'title') continue;
-
-    const compatible = properties.filter(
-      (p) => spec.acceptedTypes.includes(p.type) && !taken.has(p.name),
-    );
-    if (compatible.length === 0) {
-      unmatched.push(spec.key);
-      continue;
-    }
-
-    const exact = compatible.find((p) => spec.candidates.includes(normalizeName(p.name)));
-    const partial = compatible.find((p) => {
-      const n = normalizeName(p.name);
-      return spec.candidates.some((c) => n.includes(c) || c.includes(n));
-    });
-
-    const chosen = exact ?? partial;
-    if (chosen) {
-      mapping[spec.key] = chosen.name;
-      taken.add(chosen.name);
-    } else {
-      unmatched.push(spec.key);
-    }
-  }
-
-  return { mapping, unmatched };
-}
-
 function plainTextFromRich(rich: any): string {
   if (!Array.isArray(rich)) return '';
   return rich.map((r: any) => r?.plain_text ?? r?.text?.content ?? '').join('');
@@ -324,22 +275,36 @@ export function encodeValue(
     }
 
     case 'select':
-      if (kind !== 'status') return null;
-      return { select: record.statusText ? { name: record.statusText } : null };
+      if (kind === 'status') return { select: record.statusText ? { name: record.statusText } : null };
+      // 직원 이름이 비어 있으면 **건드리지 않는다** (기존 값을 지우지 않기 위해 null 로 건너뛴다).
+      if (kind === 'employee') return text === null ? null : { select: { name: text } };
+      return null;
 
     case 'status':
-      if (kind !== 'status') return null;
-      return { status: record.statusText ? { name: record.statusText } : null };
+      if (kind === 'status') return { status: record.statusText ? { name: record.statusText } : null };
+      if (kind === 'employee') return text === null ? null : { status: { name: text } };
+      return null;
+
+    case 'multi_select':
+      if (kind !== 'employee') return null;
+      return text === null ? null : { multi_select: [{ name: text }] };
 
     default:
       return null;
   }
 }
 
+/** 앱이 만든 행을 알아보기 위한 제목. 이 문자열이 소유권 표식 역할을 한다. */
+export function appRowTitle(record: DayRecordPayload): string {
+  const who = record.employeeName?.trim();
+  return who ? `${record.date} ${who} 근무기록` : `${record.date} 근무기록`;
+}
+
 function textValueFor(field: LogicalField, r: DayRecordPayload): string | null {
   switch (field) {
-    case 'title': return `${r.date} 근무기록`;
+    case 'title': return appRowTitle(r);
     case 'date': return r.date;
+    case 'employee': return r.employeeName?.trim() ? r.employeeName.trim() : null;
     case 'clockIn': return r.clockInText ?? '-';
     case 'clockOut': return r.clockOutText ?? '-';
     case 'actualWork': return `${r.actualHours}h`;
@@ -406,13 +371,39 @@ export function buildDateFilter(prop: NotionPropertyInfo, dateKey: string): unkn
   }
 }
 
+/** 직원 Property 타입에 맞는 조회 필터를 만든다. */
+export function buildEmployeeFilter(prop: NotionPropertyInfo, name: string): unknown {
+  switch (prop.type) {
+    case 'select': return { property: prop.name, select: { equals: name } };
+    case 'status': return { property: prop.name, status: { equals: name } };
+    case 'multi_select': return { property: prop.name, multi_select: { contains: name } };
+    case 'rich_text': return { property: prop.name, rich_text: { equals: name } };
+    case 'title': return { property: prop.name, title: { equals: name } };
+    default: return null;
+  }
+}
+
+/**
+ * 페이지의 title Property 를 평문으로 뽑는다 (소유권 판정용).
+ * `type` 필드에 기대지 않는다 — 갱신 직후 응답처럼 값만 담겨 오는 경우가 있다.
+ */
+export function pageTitleText(page: any): string {
+  for (const raw of Object.values(page?.properties ?? {})) {
+    const p = raw as any;
+    if (p?.type === 'title' || Array.isArray(p?.title)) return plainTextFromRich(p.title);
+  }
+  return '';
+}
+
 export interface UpsertResult {
   action: 'created' | 'updated';
   pageId: string;
   url?: string;
   skipped: Array<{ field: LogicalField; reason: string }>;
-  /** 같은 날짜의 행이 2개 이상 발견되면 경고만 하고 가장 오래된 것을 갱신한다 (삭제하지 않음). */
+  /** 앱이 만든 행이 2개 이상이면 경고만 하고 가장 오래된 것을 갱신한다 (삭제하지 않음). */
   duplicateWarning?: string;
+  /** 앱이 만들지 않은 행을 발견해 건드리지 않고 비켜 갔을 때의 안내 */
+  foreignRowWarning?: string;
 }
 
 export async function upsertDayRecord(args: {
@@ -451,27 +442,55 @@ export async function upsertDayRecord(args: {
     }
   }
 
-  // 2) 날짜로 조회해서 기존 행을 찾는다 (중복 생성 방지의 핵심)
-  const dateMapping = mapping.date;
-  const dateProp = dateMapping
-    ? schema.properties.find((p) => p.name === dateMapping)
+  // 2) "날짜(+직원)" 로 조회해서 앱이 이전에 만든 행을 찾는다.
+  //
+  //    여러 명이 같은 DB 를 쓰므로 날짜만으로는 행이 갈리지 않는다. 직원 Property 가
+  //    매핑돼 있으면 반드시 함께 걸러야 서로의 기록을 덮어쓰지 않는다.
+  const dateProp = mapping.date
+    ? schema.properties.find((p) => p.name === mapping.date)
     : undefined;
+  const employeeName = record.employeeName?.trim() || null;
+  const employeeProp =
+    mapping.employee && employeeName
+      ? schema.properties.find((p) => p.name === mapping.employee)
+      : undefined;
 
-  let existing: any[] = [];
+  const filters: unknown[] = [];
   if (dateProp) {
-    const filter = buildDateFilter(dateProp, record.date);
-    if (filter) {
-      const query = await client.request<any>('POST', `/databases/${databaseId}/query`, {
-        filter,
-        page_size: 10,
-      });
-      existing = (query.results ?? []).filter((p: any) => p && p.archived !== true);
-    }
+    const f = buildDateFilter(dateProp, record.date);
+    if (f) filters.push(f);
+  }
+  if (employeeProp && employeeName) {
+    const f = buildEmployeeFilter(employeeProp, employeeName);
+    if (f) filters.push(f);
   }
 
-  if (existing.length > 0) {
+  let existing: any[] = [];
+  if (filters.length > 0) {
+    const query = await client.request<any>('POST', `/databases/${databaseId}/query`, {
+      filter: filters.length === 1 ? filters[0] : { and: filters },
+      page_size: 25,
+    });
+    existing = (query.results ?? []).filter((p: any) => p && p.archived !== true);
+  }
+
+  // 3) 앱이 만든 행만 갱신 대상으로 삼는다.
+  //
+  //    예전에는 날짜만 맞으면 가장 오래된 행을 갱신했는데, 사용자가 손으로 적어 둔
+  //    행("반차", "근무" 같은)이 그 조건에 걸리면 제목·구분이 통째로 덮어써졌다.
+  //    실제로 그런 사고가 있었다. 소유권 표식(제목)이 일치하는 행만 건드린다.
+  const ownedTitle = appRowTitle(record);
+  const owned = existing.filter((p) => pageTitleText(p) === ownedTitle);
+  const foreignCount = existing.length - owned.length;
+  const foreignRowWarning =
+    foreignCount > 0
+      ? `${record.date}${employeeName ? ` · ${employeeName}` : ''} 에 앱이 만들지 않은 행이 ` +
+        `${foreignCount}개 있습니다. 그 행들은 건드리지 않았습니다.`
+      : null;
+
+  if (owned.length > 0) {
     // 가장 먼저 만들어진 행을 정본으로 삼는다. 나머지는 건드리지 않는다.
-    const target = existing.reduce((oldest: any, cur: any) =>
+    const target = owned.reduce((oldest: any, cur: any) =>
       String(cur.created_time ?? '') < String(oldest.created_time ?? '') ? cur : oldest,
     );
     const page = await client.request<any>('PATCH', `/pages/${normalizeId(target.id)}`, {
@@ -482,22 +501,29 @@ export async function upsertDayRecord(args: {
       pageId: String(page.id),
       url: page.url,
       skipped,
-      ...(existing.length > 1
+      ...(owned.length > 1
         ? {
             duplicateWarning:
-              `같은 날짜(${record.date})의 행이 ${existing.length}개 있습니다. ` +
-              `가장 오래된 행만 갱신했습니다. 나머지는 그대로 두었으니 Notion에서 직접 확인하세요.`,
+              `앱이 만든 ${record.date} 행이 ${owned.length}개 있습니다. ` +
+              `가장 오래된 행만 갱신했습니다. 나머지는 그대로 두었으니 Notion에서 직접 정리하세요.`,
           }
         : {}),
+      ...(foreignRowWarning ? { foreignRowWarning } : {}),
     };
   }
 
-  // 3) 없으면 새로 만든다
+  // 4) 없으면 새로 만든다
   const page = await client.request<any>('POST', '/pages', {
     parent: { database_id: databaseId },
     properties,
   });
-  return { action: 'created', pageId: String(page.id), url: page.url, skipped };
+  return {
+    action: 'created',
+    pageId: String(page.id),
+    url: page.url,
+    skipped,
+    ...(foreignRowWarning ? { foreignRowWarning } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -522,9 +548,14 @@ export async function addMissingProperties(args: {
     const spec = FIELD_SPEC_BY_KEY[field];
     if (!spec || spec.key === 'title') continue; // title 은 항상 존재하므로 추가하지 않는다
 
-    // 이름 충돌을 피한다 — 같은 이름이 이미 있으면 건드리지 않는다.
-    let name = spec.labelKo;
+    // 이름 충돌을 피한다 — 기존 Property 는 절대 건드리지 않고, 이름이 겹치면
+    // 접미사를 붙여 새로 만든다. (예전에는 그냥 건너뛰어서, 사용자는 "추가했다"는
+    // 메시지를 받았는데 실제로는 아무것도 안 생기는 일이 있었다.)
+    const base = spec.createName ?? spec.labelKo;
+    let name = base;
+    for (let i = 2; existingNames.has(name) && i < 20; i++) name = `${base} (${i})`;
     if (existingNames.has(name)) continue;
+    existingNames.add(name);
 
     patch[name] =
       spec.createAs === 'number' ? { number: { format: 'number' } }

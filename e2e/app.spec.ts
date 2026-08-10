@@ -110,6 +110,24 @@ test.describe('출퇴근 타이머', () => {
     await page.clock.fastForward('05:00:00');
     await expect(page.getByTestId('work-timer')).toHaveText('08:00:00');
   });
+
+  test('퇴근을 잘못 눌렀으면 복귀해서 이어서 일할 수 있다', async ({ page }) => {
+    await boot(page);
+    await page.getByTestId('btn-clock-in').click(); // 09:00
+    await page.clock.fastForward('03:00:00');
+    await page.getByTestId('btn-clock-out').click(); // 12:00 — 실수
+
+    await page.clock.fastForward('01:00:00'); // 13:00
+    await page.getByTestId('btn-resume').click();
+
+    await expect(page.getByTestId('status-chip')).toHaveText(/근무 중/);
+    await expect(page.getByTestId('clock-out-at')).toHaveText('--:--');
+
+    await page.clock.fastForward('02:00:00'); // 15:00
+    // 09~12 (3시간) + 13~15 (2시간). 퇴근해 있던 1시간은 빠진다.
+    await expect(page.getByTestId('work-timer')).toHaveText('05:00:00');
+    await expect(page.getByTestId('resume-note')).toContainText('1회 복귀');
+  });
 });
 
 test.describe('상태 복구', () => {

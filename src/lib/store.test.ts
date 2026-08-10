@@ -486,3 +486,215 @@ describe('자정을 넘긴 근무', () => {
     expect(row['퇴근 시각']).toBe('02:00');
   });
 });
+
+describe('여러 직원이 같은 DB 를 쓸 때', () => {
+  /** 직원 Property 가 있는 DB */
+  function makeTeamMock() {
+    return new NotionMock({
+      databaseId: DB_ID,
+      title: '근무 기록',
+      properties: {
+        '기록명': { id: 'p1', type: 'title' },
+        '근무 일자': { id: 'p2', type: 'date' },
+        '출근 시각': { id: 'p3', type: 'rich_text' },
+        '퇴근 시각': { id: 'p4', type: 'rich_text' },
+        '실 근무시간': { id: 'p5', type: 'number' },
+        '직원': { id: 'p6', type: 'select', options: ['정어리', '박진규'] },
+      },
+    });
+  }
+
+  it('직원을 고르지 않으면 동기화를 멈추고 이유를 알려 준다', async () => {
+    const team = makeTeamMock();
+    installBackend(team);
+    const { store, setClock } = await makeReadyStore(team);
+
+    store.perform('clock_in');
+    setClock(18);
+    store.perform('clock_out');
+    await store.drainOutbox();
+
+    expect(team.pages).toHaveLength(0);
+    expect(store.getSnapshot().runtime.syncBlocked).toContain('직원');
+    // 기록은 그대로 대기열에 남아 있다 — 나중에 직원을 정하면 그대로 올라간다
+    expect(Object.keys(store.getSnapshot().state.outbox)).toEqual([DAY]);
+  });
+
+  it('직원을 정하면 그 사람 이름으로 기록된다', async () => {
+    const team = makeTeamMock();
+    installBackend(team);
+    const { store, setClock } = await makeReadyStore(team);
+    store.setEmployeeName('정어리');
+
+    store.perform('clock_in');
+    setClock(18);
+    store.perform('clock_out');
+    await store.drainOutbox();
+
+    expect(team.pages).toHaveLength(1);
+    expect(team.read(team.pages[0]!.id)['직원']).toBe('정어리');
+    expect(store.getSnapshot().state.lastSync?.employeeName).toBe('정어리');
+  });
+
+  it('두 사람이 같은 날 일해도 서로의 행을 덮어쓰지 않는다', async () => {
+    const team = makeTeamMock();
+    installBackend(team);
+
+    const a = await makeReadyStore(team);
+    a.store.setEmployeeName('정어리');
+    a.store.perform('clock_in');
+    a.setClock(18);
+    a.store.perform('clock_out');
+    await a.store.drainOutbox();
+
+    const b = await makeReadyStore(team);
+    b.store.setEmployeeName('박진규');
+    b.store.perform('clock_in');
+    b.setClock(14);
+    b.store.perform('clock_out');
+    await b.store.drainOutbox();
+
+    expect(team.pages).toHaveLength(2);
+    const rows = team.pages.map((p) => team.read(p.id));
+    expect(rows.find((r) => r['직원'] === '정어리')?.['실 근무시간']).toBe(9);
+    expect(rows.find((r) => r['직원'] === '박진규')?.['실 근무시간']).toBe(5);
+  });
+
+  it('직원을 바꾸면 이전 사람의 행을 더 이상 갱신하지 않는다', async () => {
+    const team = makeTeamMock();
+    installBackend(team);
+    const { store, setClock } = await makeReadyStore(team);
+
+    store.setEmployeeName('정어리');
+    store.perform('clock_in');
+    setClock(18);
+    store.perform('clock_out');
+    await store.drainOutbox();
+    const firstPageId = team.pages[0]!.id;
+
+    store.setEmployeeName('박진규');
+    expect(store.getSnapshot().state.notion.pageIds).toEqual({});
+
+    store.enqueue(DAY);
+    await store.drainOutbox({ force: true });
+
+    expect(team.pages).toHaveLength(2);
+    expect(team.read(firstPageId)['직원']).toBe('정어리');
+  });
+});
+
+describe('사용자가 손으로 만든 행 보호', () => {
+  it('같은 날짜의 수동 행이 있어도 덮어쓰지 않고 새 행을 만든다', async () => {
+    const { store, setClock } = await makeReadyStore(mock);
+
+    // Notion 에 사람이 직접 적어 둔 "반차" 행
+    mock.pages.push({
+      id: 'dddd0000000000000000000000000001',
+      created_time: new Date(1_600_000_000_000).toISOString(),
+      archived: false,
+      properties: {
+        '기록명': { title: [{ type: 'text', text: { content: '반차' } }] },
+        '근무 일자': { date: { start: DAY } },
+      },
+      url: 'https://notion.so/manual',
+    });
+
+    store.perform('clock_in');
+    setClock(18);
+    store.perform('clock_out');
+    await store.drainOutbox();
+
+    expect(mock.pages).toHaveLength(2);
+    expect(mock.read('dddd0000000000000000000000000001')['기록명']).toBe('반차');
+    expect(store.getSnapshot().state.lastSync?.warning).toContain('건드리지 않았습니다');
+  });
+});
+
+describe('상태가 바뀔 때마다 Notion 에 반영', () => {
+  it('출근만 해도 Notion 에 행이 생긴다', async () => {
+    const { store } = await makeReadyStore(mock);
+    store.perform('clock_in');
+    await store.drainOutbox();
+
+    expect(mock.pages).toHaveLength(1);
+    expect(mock.read(mock.pages[0]!.id)['상태']).toBe('근무 중');
+  });
+
+  it('자리 비움 · 복귀 · 퇴근을 거쳐도 행은 하나로 유지된다', async () => {
+    const { store, setClock } = await makeReadyStore(mock);
+
+    store.perform('clock_in');
+    await store.drainOutbox();
+    setClock(12);
+    store.perform('away_start');
+    await store.drainOutbox();
+    expect(mock.read(mock.pages[0]!.id)['상태']).toBe('자리 비움');
+
+    setClock(13);
+    store.perform('away_end');
+    await store.drainOutbox();
+    setClock(18);
+    store.perform('clock_out');
+    await store.drainOutbox();
+
+    expect(mock.pages).toHaveLength(1);
+    const row = mock.read(mock.pages[0]!.id);
+    expect(row['상태']).toBe('퇴근 완료');
+    expect(row['실 근무시간']).toBe(8);
+  });
+
+  it('퇴근을 취소하고 복귀하면 Notion 도 다시 근무 중으로 바뀐다', async () => {
+    const { store, setClock } = await makeReadyStore(mock);
+
+    store.perform('clock_in');
+    setClock(12);
+    store.perform('clock_out');
+    await store.drainOutbox();
+    expect(mock.read(mock.pages[0]!.id)['상태']).toBe('퇴근 완료');
+
+    setClock(13);
+    expect(store.perform('resume')).toBe(true);
+    await store.drainOutbox();
+
+    const row = mock.read(mock.pages[0]!.id);
+    expect(row['상태']).toBe('근무 중');
+    expect(row['퇴근 시각']).toBe('-');
+    expect(mock.pages).toHaveLength(1);
+  });
+});
+
+describe('업그레이드 시 매핑 보정', () => {
+  it('저장된 매핑에 직원 칸이 없으면 캐시된 스키마로 채운다', async () => {
+    const team = new NotionMock({
+      databaseId: DB_ID,
+      title: '근무 기록',
+      properties: {
+        '기록명': { id: 'p1', type: 'title' },
+        '근무 일자': { id: 'p2', type: 'date' },
+        '직원': { id: 'p3', type: 'select', options: ['정어리', '박진규'] },
+      },
+    });
+    installBackend(team);
+
+    // 직원 개념이 없던 시절에 저장된 상태
+    const kv = memoryStore();
+    const first = await makeReadyStore(team, kv);
+    first.store.setMappingField('employee', null);
+    expect(first.store.getSnapshot().state.notion.mapping.employee).toBeUndefined();
+
+    // 새 버전이 배포돼 앱을 다시 연 상황 — 네트워크 없이도 빈 칸이 채워진다
+    const revived = new AppStore(() => t(9), kv);
+    expect(revived.getSnapshot().state.notion.mapping.employee).toBe('직원');
+    // 사용자가 고른 값은 그대로 둔다
+    expect(revived.getSnapshot().state.notion.mapping.date).toBe('근무 일자');
+  });
+
+  it('사용자가 고른 매핑은 덮어쓰지 않는다', async () => {
+    const kv = memoryStore();
+    const { store } = await makeReadyStore(mock, kv);
+    store.setMappingField('status', '기록명');
+
+    const revived = new AppStore(() => t(9), kv);
+    expect(revived.getSnapshot().state.notion.mapping.status).toBe('기록명');
+  });
+});

@@ -43,6 +43,7 @@ import {
 } from './storage';
 import { toDateKey } from './time';
 import { planVacationChange, type VacationConfig } from './vacation';
+import { suggestMapping } from '../../shared/fields';
 
 export type BackendStatus = 'checking' | 'ready' | 'unavailable' | 'error';
 
@@ -60,6 +61,14 @@ export interface RuntimeState {
   backendError: string | null;
   syncing: boolean;
   notice: Notice | null;
+  /**
+   * 자동 동기화가 설정 문제로 막혀 있을 때의 이유.
+   *
+   * 예전에는 이 상황에서 조용히 return 해서, 사용자는 "대기열도 비어 있고 오류도
+   * 없는데 Notion 에는 아무것도 없는" 상태를 원인 없이 마주했다. 이제는 설정 화면에
+   * 계속 떠 있는다.
+   */
+  syncBlocked: string | null;
 }
 
 export interface Snapshot {
@@ -78,6 +87,26 @@ function backoffFor(attempts: number): number {
   return Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** Math.max(0, attempts - 1));
 }
 
+/**
+ * 캐시된 스키마로 **비어 있는 매핑 칸만** 채운다. 사용자가 고른 값은 절대 바꾸지 않는다.
+ *
+ * 새 논리 필드(`직원`)가 추가돼도 기존 사용자는 저장된 매핑을 그대로 들고 있어서,
+ * "스키마 다시 읽기"를 누르기 전까지 그 필드가 비어 있다. 하필 그 필드가 여러 명의
+ * 기록을 가르는 기준이면, 그 사이에 두 사람 기록이 한 행으로 섞인다.
+ * 서버가 쓰는 제안 규칙과 같은 규칙을, 네트워크 없이 시작 시점에 한 번 적용한다.
+ */
+function backfillMapping(state: AppState): AppState {
+  const props = state.notion.schema?.properties;
+  if (!props || props.length === 0) return state;
+
+  const { mapping: suggested } = suggestMapping(props);
+  const merged = { ...suggested, ...state.notion.mapping };
+  const changed = Object.keys(merged).length !== Object.keys(state.notion.mapping).length;
+  if (!changed) return state;
+
+  return { ...state, notion: { ...state.notion, mapping: merged } };
+}
+
 export class AppStore {
   private snapshot: Snapshot;
   private listeners = new Set<() => void>();
@@ -91,7 +120,7 @@ export class AppStore {
     store?: KeyValueStore,
   ) {
     this.store = store ?? detectStore();
-    const state = loadState(this.store, this.now());
+    const state = backfillMapping(loadState(this.store, this.now()));
     this.snapshot = {
       state,
       runtime: {
@@ -102,6 +131,7 @@ export class AppStore {
         backendError: null,
         syncing: false,
         notice: null,
+        syncBlocked: null,
       },
     };
   }
@@ -184,10 +214,16 @@ export class AppStore {
       away_start: '자리 비움 — 근무시간 측정을 멈췄습니다.',
       away_end: '복귀 — 근무시간 측정을 재개했습니다.',
       clock_out: '퇴근 처리되었습니다.',
+      resume: '업무에 복귀했습니다 — 근무시간을 이어서 측정합니다.',
     };
     this.notify('success', labels[action]);
 
-    if (action === 'clock_out') this.enqueue(dateKey, { auto: true });
+    // 모든 상태 변화를 Notion 에 반영한다.
+    //
+    // 예전에는 퇴근할 때만 보냈다. 그러다 보니 출근해서 일하는 동안 Notion 에는
+    // 아무 흔적이 없었고, "기록이 안 넘어간다"는 오해를 샀다. 하루치 행은 어차피
+    // upsert 로 하나만 유지되므로, 매 액션마다 같은 행을 갱신하면 된다.
+    this.enqueue(dateKey, { auto: true });
     return true;
   }
 
@@ -225,6 +261,22 @@ export class AppStore {
   // -- 설정 -------------------------------------------------------------
   updateNotionSettings(patch: Partial<NotionSettings>) {
     this.setState((s) => ({ ...s, notion: { ...s.notion, ...patch } }));
+  }
+
+  /**
+   * 이 기기를 쓰는 직원을 정한다.
+   *
+   * 사람이 바뀌면 이전 사람의 Notion 행을 계속 갱신하면 안 되므로 pageId 캐시를
+   * 비운다. 다음 동기화 때 새 이름으로 행을 다시 찾거나 새로 만든다.
+   */
+  setEmployeeName(name: string) {
+    const next = name.trim();
+    if (next === this.snapshot.state.notion.employeeName) return;
+    this.setState((s) => ({
+      ...s,
+      notion: { ...s.notion, employeeName: next, pageIds: {} },
+    }));
+    this.notify('success', next ? `이 기기의 직원을 "${next}" 로 설정했습니다.` : '직원 설정을 지웠습니다.');
   }
 
   setMappingField(field: LogicalFieldKey, propertyName: string | null) {
@@ -339,6 +391,17 @@ export class AppStore {
     if (opts.auto && this.snapshot.state.notion.autoSync) void this.drainOutbox();
   }
 
+  /**
+   * 이미 동기화가 끝난 날짜라도 강제로 다시 보낸다.
+   *
+   * 매핑을 나중에 고쳤을 때 예전에는 다시 보낼 방법이 아예 없었다 —
+   * 대기열이 비어 있으면 "지금 동기화"도 아무 일도 하지 않았다.
+   */
+  resync(dateKey: string) {
+    this.enqueue(dateKey);
+    void this.drainOutbox({ force: true });
+  }
+
   removeFromOutbox(dateKey: string) {
     this.setState((s) => {
       const outbox = { ...s.outbox };
@@ -364,11 +427,13 @@ export class AppStore {
       }
     }
 
-    const mapping = this.snapshot.state.notion.mapping;
-    if (!mapping.date && !mapping.title) {
-      if (opts.force) this.notify('error', '먼저 설정에서 Notion Property 매핑을 완료하세요.');
+    const blocked = this.syncBlockReason();
+    if (blocked) {
+      this.setRuntime({ syncBlocked: blocked });
+      if (opts.force) this.notify('error', blocked);
       return;
     }
+    this.setRuntime({ syncBlocked: null });
 
     this.draining = true;
     this.setRuntime({ syncing: true });
@@ -395,6 +460,23 @@ export class AppStore {
     }
   }
 
+  /**
+   * 지금 동기화하면 안 되는 이유. 없으면 null.
+   * UI 가 그대로 띄우는 문구이므로 "무엇을 하면 되는지"까지 담는다.
+   */
+  syncBlockReason(): string | null {
+    const { mapping, employeeName } = this.snapshot.state.notion;
+    if (!mapping.date && !mapping.title) {
+      return '설정 › Property 매핑에서 최소한 날짜(또는 제목)를 지정해야 Notion에 기록할 수 있습니다.';
+    }
+    // 직원 칸을 매핑해 놓고 이름을 비워 두면, 누구 기록인지 모르는 행이 만들어지고
+    // 다른 사람 행과 섞인다. 그 전에 멈춘다.
+    if (mapping.employee && !employeeName.trim()) {
+      return '설정 › 직원에서 이 기기를 쓰는 사람을 먼저 선택하세요. 누구의 기록인지 정해야 다른 직원 기록과 섞이지 않습니다.';
+    }
+    return null;
+  }
+
   private dueEntries(force: boolean): OutboxEntry[] {
     const now = this.now();
     return Object.values(this.snapshot.state.outbox)
@@ -414,7 +496,7 @@ export class AppStore {
     }
 
     // 전송 직전에 최신 상태로 페이로드를 만든다 — 낡은 값 덮어쓰기 방지.
-    const record = buildRecord(computeDay(log, this.now()));
+    const record = buildRecord(computeDay(log, this.now()), notion.employeeName);
 
     try {
       const res = await upsertRecord(this.clientConfig(), {
@@ -424,6 +506,7 @@ export class AppStore {
         knownPageId: notion.pageIds[dateKey] ?? null,
       });
 
+      const warning = res.duplicateWarning ?? res.foreignRowWarning ?? null;
       this.setState((s) => {
         const outbox = { ...s.outbox };
         delete outbox[dateKey];
@@ -431,10 +514,18 @@ export class AppStore {
           ...s,
           outbox,
           notion: { ...s.notion, pageIds: { ...s.notion.pageIds, [dateKey]: res.pageId } },
+          lastSync: {
+            at: this.now(),
+            dateKey,
+            employeeName: record.employeeName,
+            action: res.action,
+            pageUrl: res.url ?? null,
+            warning,
+          },
         };
       });
 
-      if (res.duplicateWarning) this.notify('info', res.duplicateWarning);
+      if (warning) this.notify('info', warning);
       return true;
     } catch (err) {
       const e = err as ApiError;
