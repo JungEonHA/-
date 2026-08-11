@@ -10,6 +10,7 @@ import {
   upsertDayRecord,
   type DayRecordPayload,
 } from '../api/_notion';
+import { formatHoursKo } from '../shared/fields';
 
 const DB_ID = 'aaaaaaaabbbbccccddddeeeeeeeeeeee';
 
@@ -139,6 +140,48 @@ describe('값 인코딩', () => {
     });
     expect(properties['실 근무시간']).toEqual({ number: 8 });
     expect(properties['상태']).toEqual({ select: { name: '퇴근 완료' } });
+  });
+
+  it('소수 시간을 사람이 읽는 형태로 바꾼다', () => {
+    expect(formatHoursKo(8.25)).toBe('8시간 15분');
+    expect(formatHoursKo(8)).toBe('8시간');
+    expect(formatHoursKo(0.75)).toBe('45분');
+    expect(formatHoursKo(0)).toBe('0분');
+    // 분 단위로 먼저 반올림하므로 "0시간 60분" 같은 표기가 나오면 안 된다
+    expect(formatHoursKo(8.999)).toBe('9시간');
+    expect(formatHoursKo(0.9999)).toBe('1시간');
+  });
+
+  it('텍스트 Property 에는 "8시간 15분", 숫자 Property 에는 소수로 쓴다', async () => {
+    // 같은 값이라도 Property 타입에 따라 표현이 달라야 한다.
+    // Notion 숫자 Property 는 시간:분 표시를 지원하지 않아 8.25 로만 보인다.
+    const mock = new NotionMock({
+      databaseId: DB_ID,
+      properties: {
+        이름: { id: 'p1', type: 'title' },
+        날짜: { id: 'p2', type: 'date' },
+        근무시간텍스트: { id: 'p3', type: 'rich_text' },
+        근무시간숫자: { id: 'p4', type: 'number' },
+      },
+    });
+    const schema = await fetchDatabaseSchema(makeClient(mock), DB_ID);
+    const record: DayRecordPayload = { ...RECORD, actualHours: 8.25, creditedHours: 8.25 };
+
+    const asText = buildProperties(
+      schema,
+      { date: '날짜', actualWork: '근무시간텍스트' },
+      record,
+    ).properties;
+    const asNumber = buildProperties(
+      schema,
+      { date: '날짜', actualWork: '근무시간숫자' },
+      record,
+    ).properties;
+
+    expect(asText['근무시간텍스트']).toEqual({
+      rich_text: [{ type: 'text', text: { content: '8시간 15분' } }],
+    });
+    expect(asNumber['근무시간숫자']).toEqual({ number: 8.25 });
   });
 
   it('date 타입에 매핑된 출퇴근시간은 ISO 시각으로 쓴다', async () => {

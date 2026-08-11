@@ -16,6 +16,7 @@
 import {
   FIELD_SPECS,
   FIELD_SPEC_BY_KEY,
+  formatHoursKo,
   type FieldKind,
   type FieldMapping,
   type LogicalField,
@@ -293,10 +294,11 @@ function textValueFor(field: LogicalField, r: DayRecordPayload): string | null {
     case 'eventLog': return r.eventLogText ?? null;
     case 'clockIn': return r.clockInText ?? '-';
     case 'clockOut': return r.clockOutText ?? '-';
-    case 'actualWork': return `${r.actualHours}h`;
-    case 'awayTime': return `${r.awayHours}h`;
-    case 'vacation': return `${r.vacationHours}h`;
-    case 'credited': return `${r.creditedHours}h`;
+    // 텍스트 Property 에는 "8시간 15분" 으로 넣는다. 숫자 Property 는 소수 그대로.
+    case 'actualWork': return formatHoursKo(r.actualHours);
+    case 'awayTime': return formatHoursKo(r.awayHours);
+    case 'vacation': return formatHoursKo(r.vacationHours);
+    case 'credited': return formatHoursKo(r.creditedHours);
     case 'status': return r.statusText;
   }
 }

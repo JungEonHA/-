@@ -122,7 +122,8 @@ export const FIELD_SPECS: FieldSpec[] = [
     createAs: 'number',
     createName: '실근무시간',
     required: false,
-    descriptionKo: '자리 비움을 제외한 순수 근무시간 (숫자면 시간 단위 소수).',
+    descriptionKo:
+      '자리 비움을 제외한 순수 근무시간. 숫자 Property 면 8.25, 텍스트 Property 면 "8시간 15분" 으로 기록합니다.',
   },
   {
     key: 'awayTime',
@@ -136,7 +137,8 @@ export const FIELD_SPECS: FieldSpec[] = [
     createAs: 'number',
     createName: '자리비움시간',
     required: false,
-    descriptionKo: '근무시간에 포함되지 않은 자리 비움 누적시간.',
+    descriptionKo:
+      '근무시간에 포함되지 않은 자리 비움 누적시간. 텍스트 Property 면 "1시간 20분" 형태로 기록합니다.',
   },
   {
     key: 'vacation',
@@ -147,7 +149,8 @@ export const FIELD_SPECS: FieldSpec[] = [
     createAs: 'number',
     createName: '휴가사용시간',
     required: false,
-    descriptionKo: '해당 일자에 사용한 휴가시간.',
+    descriptionKo:
+      '해당 일자에 사용한 휴가시간. 텍스트 Property 면 "4시간" 형태로 기록합니다.',
   },
   {
     key: 'credited',
@@ -161,7 +164,8 @@ export const FIELD_SPECS: FieldSpec[] = [
     createAs: 'number',
     createName: '인정근무시간',
     required: false,
-    descriptionKo: '실제 근무시간 + 휴가 대체시간.',
+    descriptionKo:
+      '실제 근무시간 + 휴가 대체시간. 텍스트 Property 면 "8시간" 형태로 기록합니다.',
   },
   {
     key: 'status',
@@ -258,4 +262,23 @@ export function suggestMapping(properties: PropertyLike[]): {
   }
 
   return { mapping, unmatched };
+}
+
+/**
+ * 소수 시간(8.25)을 사람이 읽는 형태("8시간 15분")로 바꾼다.
+ *
+ * Notion 의 숫자 Property 에는 "시간:분" 표시 형식이 없어서 8.25 처럼만 보인다.
+ * 그래서 텍스트 Property 에 기록할 때는 이 형식을 쓴다.
+ * (숫자 Property 에는 계속 소수를 넣는다 — Notion 에서 합계·평균을 내려면 숫자여야 한다.)
+ */
+export function formatHoursKo(hours: number): string {
+  // 분 단위로 먼저 반올림한다. 0.9999 시간이 "0시간 60분" 이 되면 안 된다.
+  const totalMinutes = Math.round(Math.max(0, hours) * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+
+  if (h === 0 && m === 0) return '0분';
+  if (m === 0) return `${h}시간`;
+  if (h === 0) return `${m}분`;
+  return `${h}시간 ${m}분`;
 }
