@@ -123,6 +123,7 @@ export class AppStore {
   private redrainRequested = false;
   private lastBackendCheckAt = 0;
   private outboxSeq = 0;
+  private mappingHealAttempted = false;
 
   private keys: StateKeys;
 
@@ -507,6 +508,37 @@ export class AppStore {
     }
   }
 
+  /**
+   * 저장해 둔 스키마가 낡아 새 Property 를 못 보는 상태를 스스로 고친다.
+   *
+   * Notion 임베드 위젯은 iframe 이라 브라우저가 저장소를 따로 쪼개 준다. 그래서 전체
+   * 화면에서 `업무 리스트` Property 를 만들어도 위젯은 그 사실을 모르고, 예전 매핑으로
+   * 계속 저장한다 — 위젯에 적은 할 일이 Notion 에 영영 안 올라간다. 사용자가 설정
+   * 화면을 열어 "스키마 다시 읽기"를 누를 방법도 위젯 안에는 없다.
+   *
+   * 한 세션에 한 번만, 조용히 시도한다. Property 가 정말 없는 워크스페이스에서도
+   * 요청 한 번으로 끝나고 토스트를 띄우지 않는다.
+   */
+  private async healMapping(): Promise<void> {
+    if (this.mappingHealAttempted) return;
+    if (this.snapshot.state.notion.mapping.todos) return;
+    this.mappingHealAttempted = true;
+    try {
+      const res = await getSchema(this.clientConfig());
+      this.setState((s) => ({
+        ...s,
+        notion: {
+          ...s.notion,
+          schema: res.schema,
+          // 사용자가 직접 정한 매핑이 우선이고, 비어 있던 칸만 채운다.
+          mapping: { ...res.suggestedMapping, ...s.notion.mapping },
+        },
+      }));
+    } catch {
+      // 조용히 넘어간다 — 읽기 실패로 잃는 것은 없고 다음 세션에 다시 시도한다.
+    }
+  }
+
   async refreshSchema(): Promise<void> {
     try {
       const res = await getSchema(this.clientConfig());
@@ -607,11 +639,15 @@ export class AppStore {
       if (this.backendStatus() !== 'ready') return;
     }
 
+    // 낡은 매핑으로는 업무 리스트를 읽지도 쓰지도 못한다. 읽기 직전에 한 번 고친다.
+    await this.healMapping();
+
     try {
       const res = await getDay(this.clientConfig(), {
         dateKey,
         employeeName: employeeName.trim() || null,
-        mapping,
+        // 방금 고쳐졌을 수 있으므로 저장된 값을 다시 읽는다.
+        mapping: this.snapshot.state.notion.mapping,
       });
       if (res.pageId) {
         this.setState((s) => ({

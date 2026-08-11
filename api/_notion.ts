@@ -403,6 +403,17 @@ export interface UpsertResult {
   mergedLog?: DayLog;
 }
 
+/**
+ * 업무 리스트에 대한 "내가 마지막으로 고쳤다"는 주장을 뗀 사본.
+ *
+ * 목록 본문(todos)과 그 시각(todosAt)은 짝이다. 한쪽만 남으면 병합이 잘못된 승자를
+ * 고른다 — 내용은 모르면서 시각만 최신인 기록이 이기기 때문이다.
+ */
+function withoutTodoClaim(log: DayLog): DayLog {
+  const { todos: _todos, todosAt: _todosAt, ...rest } = log;
+  return rest;
+}
+
 export async function upsertDayRecord(args: {
   client: NotionClient;
   databaseId: string;
@@ -421,7 +432,6 @@ export async function upsertDayRecord(args: {
   const now = args.now ?? Date.now();
 
   let record = args.record;
-  let mergedLog: DayLog | null = args.dayLog ?? null;
 
   const logProp = mapping.eventLog
     ? schema.properties.find((p) => p.name === mapping.eventLog)
@@ -431,15 +441,33 @@ export async function upsertDayRecord(args: {
     : undefined;
 
   /**
+   * 업무 리스트 칸을 못 쓰는 요청은 목록의 주인 행세를 하면 안 된다.
+   *
+   * Notion 임베드 위젯은 iframe 이라 브라우저가 저장소를 따로 쪼개 준다. 그래서 전체
+   * 화면에서 `업무 리스트` Property 를 만들어도 위젯은 그 사실을 모른 채 예전 매핑으로
+   * 계속 쓴다. 그런데도 이벤트 로그에는 "내가 방금 목록을 고쳤다"는 시각(T:)이 함께
+   * 실려 나갔다. 그러면 다른 기기가 그 시각만 보고 자기 최신 목록을 버린 뒤, 정작 칸에
+   * 남아 있던 낡은 목록을 되살린다 — 위젯에서 적은 항목은 영영 안 보이고 전체 화면에서
+   * 한 완료 표시는 되돌아간다. 쓸 수 없으면 의견도 내지 않는 것이 맞다.
+   */
+  const incoming: DayLog | null = !args.dayLog
+    ? null
+    : todosProp
+      ? args.dayLog
+      : withoutTodoClaim(args.dayLog);
+
+  let mergedLog: DayLog | null = incoming;
+
+  /**
    * 기존 행에 실려 있던 다른 기기의 이벤트를 읽어 합친 뒤 근무시간을 다시 계산한다.
    *
    * 이걸 서버에서 하는 이유: 클라이언트가 "읽고 → 합치고 → 쓰는" 동안 다른 기기가
    * 끼어들면 그 사이 기록이 사라진다. 조회와 쓰기가 한 요청 안에서 끝나야 안전하다.
    */
   function absorb(page: any): void {
-    if (!logProp || !args.dayLog) return;
+    if (!logProp || !incoming) return;
     const raw = page?.properties?.[logProp.name];
-    const remote = parseDayLog(args.dayLog.date, raw ? plainTextFromRich(raw.rich_text) : '');
+    const remote = parseDayLog(incoming.date, raw ? plainTextFromRich(raw.rich_text) : '');
     if (!remote) return;
     // 업무 리스트는 이벤트가 아니라 사람이 쓴 값이라 행에서 그대로 읽어 온다.
     // 이게 없으면 늦게 동기화한 기기가 다른 기기에서 적은 목록을 지워 버린다.
@@ -447,7 +475,7 @@ export async function upsertDayRecord(args: {
       const rawTodos = page?.properties?.[todosProp.name];
       remote.todos = parseTodoText(rawTodos ? plainTextFromRich(rawTodos.rich_text) : '');
     }
-    mergedLog = mergeDayLogs(args.dayLog, remote);
+    mergedLog = mergeDayLogs(incoming, remote);
   }
 
   function currentProperties() {
@@ -477,7 +505,7 @@ export async function upsertDayRecord(args: {
     try {
       const pageId = normalizeId(args.knownPageId);
       // 연동 로그를 쓰는 경우에는 먼저 읽어야 다른 기기의 이벤트를 잃지 않는다.
-      if (logProp && args.dayLog) {
+      if (logProp && incoming) {
         absorb(await client.request<any>('GET', `/pages/${pageId}`));
         ({ properties, skipped } = currentProperties());
       }
@@ -648,6 +676,11 @@ export async function fetchDayLog(args: {
   if (dayLog && todosProp) {
     const rawTodos = target.properties?.[todosProp.name];
     dayLog.todos = parseTodoText(rawTodos ? plainTextFromRich(rawTodos.rich_text) : '');
+  } else if (dayLog?.todosAt) {
+    // 목록 칸을 읽을 수 없으면 "누가 마지막으로 고쳤는가"도 알 수 없다. 그 시각만
+    // 받아 두면 이 기기는 내용을 모른 채 최신 편집자 행세를 하게 되고, 다음 저장에서
+    // 남의 목록을 자기 낡은 목록으로 덮어쓴다.
+    delete dayLog.todosAt;
   }
 
   return { found: true, pageId: String(target.id), dayLog };

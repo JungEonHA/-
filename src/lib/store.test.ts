@@ -1262,6 +1262,63 @@ describe('업무 리스트(할 일)', () => {
     expect(m.read(m.pages[0]!.id)['업무 리스트']).toBe('☐ 먼저 적은 것\n☐ 나중에 적은 것');
   });
 
+  // Notion 임베드 위젯은 iframe 이라 브라우저가 저장소를 따로 쪼개 준다. 그래서 전체
+  // 화면에서 `업무 리스트` Property 를 만들어도 위젯은 예전 매핑을 그대로 들고 있다.
+  // 아래 두 가지가 그 상태에서 실제로 났던 고장이다.
+
+  /** `업무 리스트` Property 가 생기기 전에 설정을 마친 기기 (= 임베드 위젯) */
+  async function staleWidget(m: NotionMock) {
+    const prop = m.properties['업무 리스트']!;
+    delete m.properties['업무 리스트'];
+    const d = await todoStore(m, memoryStore());
+    // 그 뒤 전체 화면에서 Property 를 만들었다. 위젯은 그 사실을 모른다.
+    m.properties['업무 리스트'] = prop;
+    return d;
+  }
+
+  it('낡은 스키마를 들고 있어도 업무 리스트 칸을 스스로 찾아낸다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+    const widget = await staleWidget(m);
+    expect(widget.store.getSnapshot().state.notion.mapping.todos).toBeUndefined();
+
+    await widget.store.pullDay(DAY);
+    expect(widget.store.getSnapshot().state.notion.mapping.todos).toBe('업무 리스트');
+
+    // 매핑이 없던 동안에는 위젯에 적은 할 일이 Notion 으로 아예 나가지 못했다.
+    widget.store.addTodo(DAY, '위젯에서 적음');
+    await widget.store.drainOutbox();
+    expect(m.read(m.pages[0]!.id)['업무 리스트']).toBe('☐ 위젯에서 적음');
+  });
+
+  it('업무 리스트 칸을 모르는 기기의 저장이 남의 최신 목록을 되돌리지 않는다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+    const widget = await staleWidget(m);
+
+    const desktop = await todoStore(m, memoryStore());
+    desktop.setClock(10);
+    desktop.store.addTodo(DAY, '첫 항목');
+    await desktop.store.drainOutbox();
+
+    // 아직 보내지 않은 최신 목록을 데스크탑이 들고 있다.
+    desktop.setClock(11);
+    desktop.store.addTodo(DAY, '둘째 항목');
+
+    // 그 사이 위젯이 저장한다. 칸을 모르니 목록은 못 올리는데,
+    // 예전에는 "내가 방금 목록을 고쳤다"는 시각만 로그에 남겼다.
+    widget.setClock(12);
+    widget.store.addTodo(DAY, '위젯에서 적음');
+    await widget.store.drainOutbox();
+    expect(m.read(m.pages[0]!.id)['업무 리스트']).toBe('☐ 첫 항목');
+
+    // 그 시각 때문에 데스크탑은 다음 읽기에서 자기 최신 목록을 버리고
+    // 칸에 남아 있던 낡은 목록을 되살렸다.
+    desktop.setClock(13);
+    await desktop.store.pullDay(DAY);
+    expect(desktop.store.todosFor(DAY).map((t) => t.text)).toEqual(['첫 항목', '둘째 항목']);
+  });
+
   it('저장 중에 적은 할 일도 곧바로 이어서 전송된다', async () => {
     const m = makeTodoMock();
     installBackend(m);
