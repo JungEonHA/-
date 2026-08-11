@@ -13,6 +13,7 @@
  */
 
 import { DAY_MS, toDateKey } from './time.js';
+import type { TodoItem } from './todos.js';
 
 export type WorkEventType = 'clock_in' | 'away_start' | 'away_end' | 'clock_out' | 'resume';
 
@@ -32,11 +33,25 @@ export interface DayLog {
   /**
    * 이 로그를 마지막으로 손댄 시각.
    *
-   * 기기 간 병합에서 "덮어쓰는 값"(휴가시간 등)의 승자를 정하는 기준이다.
+   * 기기 간 병합에서 "덮어쓰는 값"(휴가시간·업무 리스트 등)의 승자를 정하는 기준이다.
    * 이벤트는 합집합으로 합치므로 이 값과 무관하다.
    */
   updatedAt?: number;
   memo?: string;
+  /**
+   * 그날의 업무 리스트.
+   *
+   * 이벤트와 달리 사람이 쓴 값이라 합집합이 성립하지 않는다 (같은 항목을 고친 건지
+   * 새로 적은 건지 알 수 없다). 그래서 휴가시간과 같은 규칙 — 마지막에 손댄 기기가 이긴다.
+   */
+  todos?: TodoItem[];
+  /**
+   * 업무 리스트를 마지막으로 고친 시각.
+   *
+   * `updatedAt` 과 따로 두는 이유: 출퇴근을 누르면 updatedAt 이 갱신되는데, 그것만으로
+   * 목록의 승자를 정하면 "다른 기기에서 퇴근만 눌렀는데 적어 둔 목록이 사라지는" 일이 생긴다.
+   */
+  todosAt?: number;
 }
 
 export type WorkStatus = 'not_started' | 'working' | 'away' | 'finished';

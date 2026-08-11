@@ -13,6 +13,7 @@
 import { useState } from 'react';
 import { computeDay, type WorkStatus } from '../lib/events';
 import { formatClock, formatDateKeyKo, formatDuration, formatDurationKo } from '../lib/time';
+import { MAX_TODO_TEXT, todoSummary } from '../lib/todos';
 import { fullViewUrl } from '../lib/bootParams';
 import { useSnapshot, useStore } from '../hooks/useAppStore';
 import { StatusChip } from './ui';
@@ -81,6 +82,8 @@ export function WidgetPanel({ now }: { now: number }) {
       </div>
 
       <WidgetActions status={today.status} />
+
+      <WidgetTodos dateKey={activeDate} />
 
       <div className="widget__foot">
         <span data-testid="widget-sync">{syncText(state, runtime, pending)}</span>
@@ -166,6 +169,102 @@ function WidgetActions({ status }: { status: WorkStatus }) {
       >
         퇴근하기
       </button>
+    </div>
+  );
+}
+
+/**
+ * 위젯 안의 할 일 목록.
+ *
+ * 기본은 접혀 있다. 임베드 블록의 높이는 사용자가 Notion 에서 손으로 맞춰 둔 값이라,
+ * 이미 걸어 둔 위젯이 갑자기 길어져 버튼이 잘리면 안 된다. 펼치면 그 자리에서
+ * 추가·체크까지 되고, 그대로 그날 근무 기록 행에 저장된다.
+ */
+function WidgetTodos({ dateKey }: { dateKey: string }) {
+  const store = useStore();
+  useSnapshot(); // 목록이 바뀌면 다시 그린다
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  const todos = store.todosFor(dateKey);
+  const { done, total } = todoSummary(todos);
+
+  function add() {
+    if (store.addTodo(dateKey, draft)) setDraft('');
+  }
+
+  return (
+    <div className="widgetTodo">
+      <button
+        type="button"
+        className="widgetTodo__toggle"
+        data-testid="widget-todo-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span aria-hidden="true">📝</span>
+        <span>오늘 할 일</span>
+        <span className="widgetTodo__count">{total === 0 ? '없음' : `${done}/${total}`}</span>
+        <span className="header__spacer" />
+        <span aria-hidden="true">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className="widgetTodo__body">
+          {todos.length > 0 && (
+            <ul className="widgetTodo__list" data-testid="widget-todo-list">
+              {todos.map((todo) => (
+                <li
+                  key={todo.id}
+                  className={`widgetTodo__item ${todo.done ? 'widgetTodo__item--done' : ''}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={todo.done}
+                    aria-label={`${todo.text} 완료 표시`}
+                    onChange={() => store.toggleTodo(dateKey, todo.id)}
+                  />
+                  <span className="widgetTodo__text">{todo.text}</span>
+                  <button
+                    type="button"
+                    className="widgetTodo__remove"
+                    aria-label={`${todo.text} 삭제`}
+                    onClick={() => store.removeTodo(dateKey, todo.id)}
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="widgetTodo__add">
+            <input
+              className="input"
+              data-testid="widget-todo-input"
+              placeholder="할 일 적기"
+              maxLength={MAX_TODO_TEXT}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  add();
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn--primary btn--sm"
+              data-testid="widget-todo-add"
+              disabled={!draft.trim()}
+              onClick={add}
+            >
+              추가
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

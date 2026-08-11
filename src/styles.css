@@ -794,6 +794,132 @@ button { font-family: inherit; }
   padding: 9px 12px;
 }
 
+/* ==========================================================================
+   할 일 (업무 리스트)
+   ========================================================================== */
+
+.todo__count {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--primary);
+  white-space: nowrap;
+}
+
+.todo__add { display: flex; gap: 8px; align-items: center; }
+.todo__add .input { flex: 1; min-width: 0; }
+
+.todo__bar {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  overflow: hidden;
+  margin-top: 12px;
+}
+.todo__barFill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 999px;
+  transition: width 160ms ease-out;
+}
+
+.todo__list { list-style: none; margin: 12px 0 0; padding: 0; }
+
+.todo__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.todo__item:last-child { border-bottom: none; }
+
+.todo__check { width: 17px; height: 17px; flex: none; accent-color: var(--primary); }
+
+.todo__text {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: text;
+  word-break: break-word;
+}
+.todo__item--done .todo__text { color: var(--text-muted); text-decoration: line-through; }
+
+.todo__edit { flex: 1; min-width: 0; padding: 6px 9px; font-size: 14px; }
+
+.todo__tools { display: flex; gap: 2px; flex: none; }
+.todo__tools .btn { padding: 5px 8px; }
+.todo__tools .btn:disabled { opacity: 0.3; }
+
+/* -- 위젯 안의 축소판 ------------------------------------------------------ */
+
+.widgetTodo { border-top: 1px solid var(--border); padding-top: 7px; }
+
+.widgetTodo__toggle {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.widgetTodo__count { color: var(--primary); }
+
+.widgetTodo__body { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+
+.widgetTodo__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 132px;
+  overflow-y: auto;
+}
+
+.widgetTodo__item { display: flex; align-items: center; gap: 7px; padding: 3px 0; }
+.widgetTodo__item input { width: 14px; height: 14px; flex: none; accent-color: var(--primary); }
+
+.widgetTodo__text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  word-break: break-word;
+}
+.widgetTodo__item--done .widgetTodo__text {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.widgetTodo__remove {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0 2px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex: none;
+}
+.widgetTodo__remove:hover { color: var(--danger); }
+
+.widgetTodo__add { display: flex; gap: 6px; align-items: center; }
+.widgetTodo__add .input { flex: 1; min-width: 0; padding: 6px 9px; font-size: 12px; }
+
 /* 화면 낭독기 전용 */
 .sr-only {
   position: absolute;

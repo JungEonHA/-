@@ -17,6 +17,7 @@ export type LogicalField =
   | 'vacation'
   | 'credited'
   | 'status'
+  | 'todos'
   | 'eventLog';
 
 /** 값의 성격. 어떤 Notion 타입에 어떻게 인코딩할지 결정한다. */
@@ -27,6 +28,7 @@ export type FieldKind =
   | 'status'
   | 'employee'
   | 'eventLog'
+  | 'todos'
   | 'text';
 
 export interface FieldSpec {
@@ -177,6 +179,23 @@ export const FIELD_SPECS: FieldSpec[] = [
     createName: '근무상태',
     required: false,
     descriptionKo: '퇴근 완료 / 근무 중 / 자리 비움 / 휴가 / 출근 전.',
+  },
+  {
+    key: 'todos',
+    labelKo: '업무 리스트',
+    kind: 'todos',
+    // 체크리스트를 줄바꿈으로 이어 붙인 텍스트라서 텍스트 칸에만 쓸 수 있다.
+    acceptedTypes: ['rich_text'],
+    candidates: [
+      '업무리스트', '업무내용', '업무일지', '업무기록', '오늘할일', '할일', '할일목록',
+      '작업내용', '작업목록', '체크리스트',
+      'todo', 'todos', 'todolist', 'tasks', 'tasklist', 'checklist', 'worklog',
+    ],
+    createAs: 'rich_text',
+    createName: '업무 리스트',
+    required: false,
+    descriptionKo:
+      '앱의 “할 일” 탭에 적은 목록을 ☑/☐ 체크리스트로 그날 행에 기록합니다. 앱에서 지우면 Notion 값도 함께 비워집니다.',
   },
   {
     key: 'eventLog',

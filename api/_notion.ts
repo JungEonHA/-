@@ -34,6 +34,7 @@ export {
 import { computeDay, type DayLog } from '../shared/events.js';
 import { buildRecord, type DayRecordPayload } from '../shared/record.js';
 import { mergeDayLogs, parseDayLog, serializeDayLog } from '../shared/dayLog.js';
+import { parseTodoText } from '../shared/todos.js';
 
 export { type DayRecordPayload } from '../shared/record.js';
 
@@ -240,12 +241,14 @@ export function encodeValue(
 
   switch (propType) {
     case 'title':
-      // 연동 로그가 실수로 제목에 매핑되면 제목이 기계값으로 덮인다. 그건 막는다.
-      if (kind === 'eventLog') return null;
+      // 연동 로그나 업무 리스트가 실수로 제목에 매핑되면 제목이 통째로 덮인다. 그건 막는다.
+      if (kind === 'eventLog' || kind === 'todos') return null;
       return text === null ? null : { title: [{ type: 'text', text: { content: text } }] };
 
     case 'rich_text':
-      return text === null ? null : { rich_text: [{ type: 'text', text: { content: text } }] };
+      if (text === null) return null;
+      // 빈 문자열은 "지운다"는 뜻이다 (업무 리스트를 모두 삭제한 경우).
+      return text === '' ? { rich_text: [] } : { rich_text: [{ type: 'text', text: { content: text } }] };
 
     case 'number':
       if (kind !== 'duration') return null;
@@ -292,6 +295,7 @@ function textValueFor(field: LogicalField, r: DayRecordPayload): string | null {
     case 'date': return r.date;
     case 'employee': return r.employeeName?.trim() ? r.employeeName.trim() : null;
     case 'eventLog': return r.eventLogText ?? null;
+    case 'todos': return r.todoText;
     case 'clockIn': return r.clockInText ?? '-';
     case 'clockOut': return r.clockOutText ?? '-';
     // 텍스트 Property 에는 "8시간 15분" 으로 넣는다. 숫자 Property 는 소수 그대로.
@@ -422,6 +426,9 @@ export async function upsertDayRecord(args: {
   const logProp = mapping.eventLog
     ? schema.properties.find((p) => p.name === mapping.eventLog)
     : undefined;
+  const todosProp = mapping.todos
+    ? schema.properties.find((p) => p.name === mapping.todos)
+    : undefined;
 
   /**
    * 기존 행에 실려 있던 다른 기기의 이벤트를 읽어 합친 뒤 근무시간을 다시 계산한다.
@@ -434,6 +441,12 @@ export async function upsertDayRecord(args: {
     const raw = page?.properties?.[logProp.name];
     const remote = parseDayLog(args.dayLog.date, raw ? plainTextFromRich(raw.rich_text) : '');
     if (!remote) return;
+    // 업무 리스트는 이벤트가 아니라 사람이 쓴 값이라 행에서 그대로 읽어 온다.
+    // 이게 없으면 늦게 동기화한 기기가 다른 기기에서 적은 목록을 지워 버린다.
+    if (todosProp) {
+      const rawTodos = page?.properties?.[todosProp.name];
+      remote.todos = parseTodoText(rawTodos ? plainTextFromRich(rawTodos.rich_text) : '');
+    }
     mergedLog = mergeDayLogs(args.dayLog, remote);
   }
 
@@ -443,6 +456,7 @@ export async function upsertDayRecord(args: {
         computeDay(mergedLog, now),
         args.record.employeeName ?? null,
         serializeDayLog(mergedLog),
+        mergedLog.todos ?? null,
       );
     }
     return buildProperties(schema, mapping, record);
@@ -627,6 +641,14 @@ export async function fetchDayLog(args: {
     : undefined;
   const raw = logProp ? target.properties?.[logProp.name] : undefined;
   const dayLog = parseDayLog(dateKey, raw ? plainTextFromRich(raw.rich_text) : '');
+
+  const todosProp = mapping.todos
+    ? schema.properties.find((p) => p.name === mapping.todos)
+    : undefined;
+  if (dayLog && todosProp) {
+    const rawTodos = target.properties?.[todosProp.name];
+    dayLog.todos = parseTodoText(rawTodos ? plainTextFromRich(rawTodos.rich_text) : '');
+  }
 
   return { found: true, pageId: String(target.id), dayLog };
 }

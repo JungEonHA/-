@@ -16,6 +16,7 @@
 
 import type { DayLog, WorkEvent, WorkEventType } from './events.js';
 import { dateKeyToEpoch } from './time.js';
+import { sameTodos } from './todos.js';
 
 /** 형식 버전. 앞으로 형식을 바꾸면 이 값을 올리고 파서에서 분기한다. */
 export const EVENT_LOG_VERSION = 'v1';
@@ -44,29 +45,33 @@ const TYPE_BY_CODE: Record<string, WorkEventType> = {
 const MAX_TEXT_LENGTH = 1900;
 
 /**
- * "v1 U:<epochMs> V:<휴가ms> i:<상대ms> as:<상대ms> …"
+ * "v1 U:<epochMs> V:<휴가ms> T:<epochMs> i:<상대ms> as:<상대ms> …"
  *
  * 시각을 그날 자정(KST) 기준 상대값으로 적는 이유는 길이를 줄이기 위해서다.
  * 자정을 넘긴 근무는 86400000 을 넘는 값이 되므로 그대로 표현된다.
+ *
+ * `T` 는 업무 리스트를 마지막으로 고친 시각이다. 목록 본문은 여기 싣지 않는다 —
+ * 사람이 읽는 값이라 Notion 의 자기 칸에 따로 적히고, 여기에는 "누가 더 최근에
+ * 고쳤는가"를 가릴 시각만 둔다.
  */
 export function serializeDayLog(log: DayLog): string {
   const base = dateKeyToEpoch(log.date);
-  const parts = [
+  const head = [
     EVENT_LOG_VERSION,
     `U:${Math.max(0, Math.floor(log.updatedAt ?? 0))}`,
     `V:${Math.max(0, Math.floor(log.vacationMs || 0))}`,
   ];
-  for (const ev of [...log.events].sort((a, b) => a.at - b.at)) {
-    parts.push(`${CODE_BY_TYPE[ev.type]}:${ev.at - base}`);
-  }
+  if (log.todosAt) head.push(`T:${Math.max(0, Math.floor(log.todosAt))}`);
 
-  const text = parts.join(' ');
+  const tail = [...log.events]
+    .sort((a, b) => a.at - b.at)
+    .map((ev) => `${CODE_BY_TYPE[ev.type]}:${ev.at - base}`);
+
+  const text = [...head, ...tail].join(' ');
   if (text.length <= MAX_TEXT_LENGTH) return text;
 
   // 여기 오면 이미 비정상이지만, 잘라야 한다면 **오래된 것부터** 버린다.
   // 최근 이벤트가 현재 상태(근무 중/퇴근)를 결정하기 때문이다.
-  const head = parts.slice(0, 3);
-  const tail = parts.slice(3);
   while (tail.length > 0 && [...head, ...tail].join(' ').length > MAX_TEXT_LENGTH) tail.shift();
   return [...head, ...tail].join(' ');
 }
@@ -81,6 +86,7 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
   const events: WorkEvent[] = [];
   let updatedAt = 0;
   let vacationMs = 0;
+  let todosAt = 0;
 
   for (const token of tokens.slice(1)) {
     const sep = token.indexOf(':');
@@ -97,13 +103,17 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
       vacationMs = Math.max(0, value);
       continue;
     }
+    if (code === 'T') {
+      todosAt = Math.max(0, value);
+      continue;
+    }
     const type = TYPE_BY_CODE[code];
     if (!type) continue;
     events.push({ type, at: base + value });
   }
 
   events.sort((a, b) => a.at - b.at);
-  return { date: dateKey, events, vacationMs, updatedAt };
+  return { date: dateKey, events, vacationMs, updatedAt, ...(todosAt ? { todosAt } : {}) };
 }
 
 /**
@@ -130,12 +140,26 @@ export function mergeDayLogs(a: DayLog | null, b: DayLog | null): DayLog | null 
   const bAt = b.updatedAt ?? 0;
   const newer = bAt > aAt ? b : a;
 
+  // 업무 리스트는 **자기 시각(todosAt)** 으로 승자를 가린다.
+  //
+  // updatedAt 을 쓰면 안 된다 — 데스크탑에서 목록을 적어 두고 노트북에서 퇴근만 눌러도
+  // 노트북이 "더 최근"이 되어 목록을 통째로 지운다. 목록을 고친 사람만 목록을 이긴다.
+  const aTodosAt = a.todosAt ?? 0;
+  const bTodosAt = b.todosAt ?? 0;
+  const todoWinner = bTodosAt > aTodosAt ? b : bTodosAt < aTodosAt ? a : newer;
+  // "목록을 비웠다"도 뜻이 있는 값이라 빈 배열과 없음을 구분한다.
+  // 이긴 쪽이 목록을 가진 적조차 없을 때만 반대쪽 것을 살린다.
+  const todos = todoWinner.todos ?? (todoWinner === a ? b.todos : a.todos);
+  const todosAt = Math.max(aTodosAt, bTodosAt);
+
   return {
     date: a.date,
     events,
     vacationMs: newer.vacationMs,
     updatedAt: Math.max(aAt, bAt),
     ...(newer.memo ? { memo: newer.memo } : {}),
+    ...(todos ? { todos } : {}),
+    ...(todosAt ? { todosAt } : {}),
   };
 }
 
@@ -144,6 +168,9 @@ export function sameDayLog(a: DayLog | null, b: DayLog | null): boolean {
   if (!a || !b) return a === b;
   if (a.events.length !== b.events.length) return false;
   if ((a.vacationMs || 0) !== (b.vacationMs || 0)) return false;
+  // 업무 리스트만 달라진 경우도 "바뀐 것"이다. 이걸 빼면 다른 기기에서 적은
+  // 목록을 받아 놓고도 저장하지 않아 화면에 영영 안 나타난다.
+  if (!sameTodos(a.todos, b.todos)) return false;
   return a.events.every((ev, i) => {
     const other = b.events[i];
     return !!other && other.type === ev.type && other.at === ev.at;

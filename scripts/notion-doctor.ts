@@ -284,6 +284,7 @@ async function runWriteTest(
     date: dateKey,
     employeeName: null,
     eventLogText: null,
+    todoText: null,
     clockInIso: toKstIso(noonKst),
     clockOutIso: toKstIso(noonKst + 60_000),
     clockInText: '12:00',

@@ -5,6 +5,7 @@ import { AppStore } from './store';
 import { computeDay } from './events';
 import { memoryStore } from './storage.test';
 import { HOUR_MS, dateKeyToEpoch } from './time';
+import { MAX_TODOS } from './todos';
 import type { KeyValueStore } from './storage';
 
 const DB_ID = 'aaaaaaaabbbbccccddddeeeeeeeeeeee';
@@ -1064,5 +1065,230 @@ describe('직원 칸을 처음 만들 때의 저장 순서', () => {
     expect(reopened.getSnapshot().state.notion.accessKey).toBe('team-key');
     expect(reopened.getSnapshot().state.notion.mapping.date).toBe('근무 일자');
     expect(reopened.getSnapshot().state.notion.employeeName).toBe('박진규');
+  });
+});
+
+describe('업무 리스트(할 일)', () => {
+  /** 업무 리스트 칸까지 갖춘 DB */
+  function makeTodoMock() {
+    return new NotionMock({
+      databaseId: DB_ID,
+      title: '근무 기록',
+      properties: {
+        '기록명': { id: 'p1', type: 'title' },
+        '근무 일자': { id: 'p2', type: 'date' },
+        '출근 시각': { id: 'p3', type: 'rich_text' },
+        '퇴근 시각': { id: 'p4', type: 'rich_text' },
+        '실 근무시간': { id: 'p5', type: 'number' },
+        '상태': { id: 'p6', type: 'select', options: [] },
+        '직원': { id: 'p7', type: 'select', options: ['하정언', '박진규'] },
+        '이벤트로그': { id: 'p8', type: 'rich_text' },
+        '업무 리스트': { id: 'p9', type: 'rich_text' },
+      },
+    });
+  }
+
+  async function todoStore(m: NotionMock, kv?: KeyValueStore) {
+    const d = await makeReadyStore(m, kv);
+    d.store.setEmployeeName('하정언');
+    return d;
+  }
+
+  it('업무 리스트 칸을 자동으로 찾아 매핑한다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+    const { store } = await todoStore(m);
+    expect(store.getSnapshot().state.notion.mapping.todos).toBe('업무 리스트');
+  });
+
+  it('적은 할 일이 그날 행에 체크리스트로 기록된다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+    const { store } = await todoStore(m);
+
+    store.addTodo(DAY, '3화 대본 초고');
+    store.addTodo(DAY, '썸네일 시안');
+    store.toggleTodo(DAY, store.todosFor(DAY)[0]!.id);
+    await store.drainOutbox();
+
+    expect(m.pages).toHaveLength(1);
+    expect(m.read(m.pages[0]!.id)['업무 리스트']).toBe('☑ 3화 대본 초고\n☐ 썸네일 시안');
+  });
+
+  it('출근 전에 적어도 그날 행이 만들어진다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+    const { store } = await todoStore(m);
+
+    store.addTodo(DAY, '오늘 계획');
+    await store.drainOutbox();
+
+    expect(m.pages).toHaveLength(1);
+    expect(m.read(m.pages[0]!.id)['기록명']).toBe(`${DAY} 하정언 근무기록`);
+  });
+
+  it('모두 지우면 Notion 칸도 비워진다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+    const { store } = await todoStore(m);
+
+    store.addTodo(DAY, '지울 것');
+    await store.drainOutbox();
+    expect(m.read(m.pages[0]!.id)['업무 리스트']).toBe('☐ 지울 것');
+
+    store.removeTodo(DAY, store.todosFor(DAY)[0]!.id);
+    await store.drainOutbox();
+
+    expect(m.pages).toHaveLength(1);
+    expect(m.read(m.pages[0]!.id)['업무 리스트']).toBe('');
+  });
+
+  it('수정·이동·중복 삭제가 목록에 그대로 반영된다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+    const { store } = await todoStore(m);
+
+    store.addTodo(DAY, '하나');
+    store.addTodo(DAY, '둘');
+    const [first, second] = store.todosFor(DAY);
+
+    expect(store.editTodo(DAY, first!.id, '하나 고침')).toBe(true);
+    // 빈 값으로는 지워지지 않는다 (삭제는 삭제 버튼으로만)
+    expect(store.editTodo(DAY, first!.id, '   ')).toBe(false);
+    expect(store.todosFor(DAY)[0]!.text).toBe('하나 고침');
+
+    store.moveTodo(DAY, second!.id, -1);
+    expect(store.todosFor(DAY).map((t) => t.text)).toEqual(['둘', '하나 고침']);
+
+    // 맨 위에서 더 올리려 해도 아무 일도 일어나지 않는다
+    store.moveTodo(DAY, second!.id, -1);
+    expect(store.todosFor(DAY).map((t) => t.text)).toEqual(['둘', '하나 고침']);
+
+    store.removeTodo(DAY, second!.id);
+    store.removeTodo(DAY, second!.id);
+    expect(store.todosFor(DAY).map((t) => t.text)).toEqual(['하나 고침']);
+  });
+
+  it('빈 문자열은 추가되지 않고, 하루 개수 상한을 넘지 못한다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+    const { store } = await todoStore(m);
+
+    expect(store.addTodo(DAY, '   ')).toBe(false);
+    for (let i = 0; i < MAX_TODOS; i++) store.addTodo(DAY, `할 일 ${i}`);
+    expect(store.addTodo(DAY, '넘치는 것')).toBe(false);
+    expect(store.todosFor(DAY)).toHaveLength(MAX_TODOS);
+    expect(store.getSnapshot().runtime.notice?.kind).toBe('error');
+  });
+
+  it('출근 기록이 없는 날에 적어도 새로고침 후 남아 있다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+    const kv = memoryStore();
+    const { store } = await todoStore(m, kv);
+
+    store.addTodo(DAY, '내일 할 것');
+
+    // 이벤트가 하나도 없는 하루라 예전에는 저장 단계에서 통째로 버려졌다.
+    const reopened = new AppStore(() => t(10), kv);
+    expect(reopened.todosFor(DAY).map((t) => t.text)).toEqual(['내일 할 것']);
+  });
+
+  it('다른 기기가 적어 둔 목록을 가져와 이어서 쓴다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+
+    const desktop = await todoStore(m, memoryStore());
+    desktop.store.addTodo(DAY, '데스크탑에서 적음');
+    await desktop.store.drainOutbox();
+
+    const laptop = await todoStore(m, memoryStore());
+    expect(laptop.store.todosFor(DAY)).toHaveLength(0);
+
+    await laptop.store.pullDay(DAY);
+    expect(laptop.store.todosFor(DAY).map((t) => t.text)).toEqual(['데스크탑에서 적음']);
+  });
+
+  it('다른 기기에서 퇴근만 눌러도 적어 둔 목록이 지워지지 않는다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+
+    const laptop = await todoStore(m, memoryStore());
+    laptop.setClock(9);
+    laptop.store.perform('clock_in');
+    await laptop.store.drainOutbox();
+
+    const desktop = await todoStore(m, memoryStore());
+    desktop.setClock(9);
+    await desktop.store.pullDay(DAY);
+    desktop.store.addTodo(DAY, '첫 항목');
+    await desktop.store.drainOutbox();
+
+    // 노트북이 그 시점의 목록을 한 번 받아 간다 (이제 **낡은 목록**을 들고 있다).
+    laptop.setClock(10);
+    await laptop.store.pullDay(DAY);
+    expect(laptop.store.todosFor(DAY).map((t) => t.text)).toEqual(['첫 항목']);
+
+    // 그 뒤 데스크탑에서만 목록이 자란다.
+    desktop.setClock(11);
+    desktop.store.addTodo(DAY, '둘째 항목');
+    await desktop.store.drainOutbox();
+
+    // 노트북은 목록에 손댄 적이 없다. 퇴근을 눌렀다는 이유로 낡은 목록이 이기면 안 된다.
+    laptop.setClock(18);
+    laptop.store.perform('clock_out');
+    await laptop.store.drainOutbox();
+
+    expect(m.pages).toHaveLength(1);
+    expect(m.read(m.pages[0]!.id)['업무 리스트']).toBe('☐ 첫 항목\n☐ 둘째 항목');
+    expect(m.read(m.pages[0]!.id)['퇴근 시각']).toBe('18:00');
+  });
+
+  it('나중에 목록을 고친 기기가 이긴다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+
+    const desktop = await todoStore(m, memoryStore());
+    desktop.setClock(10);
+    desktop.store.addTodo(DAY, '먼저 적은 것');
+    await desktop.store.drainOutbox();
+
+    const laptop = await todoStore(m, memoryStore());
+    laptop.setClock(11);
+    await laptop.store.pullDay(DAY);
+    laptop.store.addTodo(DAY, '나중에 적은 것');
+    await laptop.store.drainOutbox();
+
+    expect(m.read(m.pages[0]!.id)['업무 리스트']).toBe('☐ 먼저 적은 것\n☐ 나중에 적은 것');
+  });
+
+  it('저장 중에 적은 할 일도 곧바로 이어서 전송된다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+    const { store } = await todoStore(m);
+    store.updateNotionSettings({ autoSync: true });
+
+    // 첫 전송이 끝나기 전에 두 번째를 적는다. 대기열은 날짜 하나로 합쳐지므로
+    // 재실행이 없으면 두 번째 항목은 다음 주기(1분)까지 Notion 에 가지 못한다.
+    store.addTodo(DAY, '첫 번째');
+    store.addTodo(DAY, '두 번째');
+
+    await vi.waitFor(() => {
+      expect(m.pages).toHaveLength(1);
+      expect(m.read(m.pages[0]!.id)['업무 리스트']).toBe('☐ 첫 번째\n☐ 두 번째');
+    });
+    expect(Object.keys(store.getSnapshot().state.outbox)).toEqual([]);
+  });
+
+  it('업무 리스트 칸이 없는 DB 에서도 목록은 기기에 남는다', async () => {
+    // 기본 mock 에는 업무 리스트 칸이 없다 — 매핑이 비고, 동기화는 그 필드만 건너뛴다.
+    const { store } = await makeReadyStore(mock);
+    expect(store.getSnapshot().state.notion.mapping.todos).toBeUndefined();
+
+    store.addTodo(DAY, '어딘가에는 남아야 함');
+    await store.drainOutbox();
+
+    expect(store.todosFor(DAY).map((t) => t.text)).toEqual(['어딘가에는 남아야 함']);
+    expect(mock.pages).toHaveLength(1);
   });
 });

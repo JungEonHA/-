@@ -13,6 +13,7 @@ import type { LogicalField } from '../../shared/fields';
 import type { DayLog } from './events';
 import type { VacationConfig } from './vacation';
 import { defaultVacationConfig } from './vacation';
+import { normalizeTodos } from './todos';
 
 export const STORAGE_KEY = 'worktime.studio.state.v1';
 export const BACKUP_KEY = 'worktime.studio.state.v1.bak';
@@ -95,6 +96,14 @@ export interface OutboxEntry {
   nextAttemptAt: number;
   lastError: string | null;
   queuedAt: number;
+  /**
+   * 이 날짜가 "더럽다"고 표시된 횟수.
+   *
+   * 전송이 끝났을 때 이 값이 보내기 시작할 때와 다르면, 보내는 동안 기록이 또 바뀐
+   * 것이므로 항목을 지우지 않는다. 이게 없으면 전송 중에 적은 내용이 큐에서 조용히
+   * 사라져서 다음 동작이 있을 때까지 Notion 에 영영 가지 않는다.
+   */
+  seq: number;
 }
 
 export interface AppState {
@@ -202,8 +211,26 @@ export function normalizeState(raw: unknown, now: number): AppState {
       typeof v.vacationMs === 'number' && Number.isFinite(v.vacationMs)
         ? Math.max(0, v.vacationMs)
         : 0;
-    if (events.length === 0 && vacationMs === 0) continue;
-    logs[dateKey] = { date: dateKey, events, vacationMs, ...(v.memo ? { memo: v.memo } : {}) };
+    // 아직 출근하지 않았어도 그날 할 일을 미리 적어 둘 수 있다. 그 하루를 버리면
+    // 새로고침 한 번에 목록이 사라진다.
+    //
+    // 목록을 **모두 지운** 하루도 버리면 안 된다. 그 하루가 사라지면 "비웠다"는 사실이
+    // 어디에도 남지 않아 Notion 의 옛 목록이 영영 지워지지 않는다.
+    const todos = Array.isArray(v.todos) ? normalizeTodos(v.todos) : null;
+    if (events.length === 0 && vacationMs === 0 && todos === null) continue;
+    logs[dateKey] = {
+      date: dateKey,
+      events,
+      vacationMs,
+      ...(typeof v.updatedAt === 'number' && Number.isFinite(v.updatedAt)
+        ? { updatedAt: Math.max(0, v.updatedAt) }
+        : {}),
+      ...(typeof v.todosAt === 'number' && Number.isFinite(v.todosAt)
+        ? { todosAt: Math.max(0, v.todosAt) }
+        : {}),
+      ...(v.memo ? { memo: v.memo } : {}),
+      ...(todos === null ? {} : { todos }),
+    };
   }
 
   const vacation: VacationConfig = {
@@ -243,6 +270,7 @@ export function normalizeState(raw: unknown, now: number): AppState {
       nextAttemptAt: typeof e.nextAttemptAt === 'number' ? e.nextAttemptAt : 0,
       lastError: typeof e.lastError === 'string' ? e.lastError : null,
       queuedAt: typeof e.queuedAt === 'number' ? e.queuedAt : now,
+      seq: typeof e.seq === 'number' && Number.isFinite(e.seq) ? e.seq : 0,
     };
   }
 

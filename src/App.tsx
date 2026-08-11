@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNow } from './hooks/useNow';
 import { useSnapshot, useStore } from './hooks/useAppStore';
 import { HomePanel } from './components/HomePanel';
+import { TodoPanel } from './components/TodoPanel';
 import { VacationPanel } from './components/VacationPanel';
 import { SummaryPanel } from './components/SummaryPanel';
 import { SettingsPanel } from './components/SettingsPanel';
@@ -10,10 +11,11 @@ import { computeDay } from './lib/events';
 import { DAY_MS, formatClockSeconds, toDateKey } from './lib/time';
 import { StatusChip } from './components/ui';
 
-type Tab = 'home' | 'vacation' | 'summary' | 'settings';
+type Tab = 'home' | 'todo' | 'vacation' | 'summary' | 'settings';
 
 const TABS: Array<{ key: Tab; label: string; icon: string }> = [
   { key: 'home', label: '홈', icon: '🏠' },
+  { key: 'todo', label: '할 일', icon: '📝' },
   { key: 'vacation', label: '휴가', icon: '🌴' },
   { key: 'summary', label: '집계', icon: '📊' },
   { key: 'settings', label: '설정', icon: '⚙️' },
@@ -153,6 +155,7 @@ export default function App({ widget = false }: { widget?: boolean }) {
 
       <main className="app__body">
         {tab === 'home' && <HomePanel now={now} />}
+        {tab === 'todo' && <TodoPanel now={now} />}
         {tab === 'vacation' && <VacationPanel now={now} />}
         {tab === 'summary' && <SummaryPanel now={now} />}
         {tab === 'settings' && <SettingsPanel />}

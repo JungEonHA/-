@@ -5,6 +5,7 @@
 
 import type { DayTotals } from './events.js';
 import { formatClock, msToHours, toKstIso } from './time.js';
+import { formatTodoText, type TodoItem } from './todos.js';
 
 export interface DayRecordPayload {
   date: string;
@@ -21,6 +22,13 @@ export interface DayRecordPayload {
   statusText: string;
   /** 기기 간 병합용 이벤트 로그(직렬화 문자열). 매핑돼 있을 때만 쓰인다. */
   eventLogText: string | null;
+  /**
+   * 업무 리스트 체크리스트 텍스트.
+   *
+   * `null` 과 빈 문자열의 뜻이 다르다 — null 은 "이 기기는 업무 리스트를 모른다"라
+   * Notion 값을 건드리지 않고, 빈 문자열은 "목록을 비웠다"라 그 칸을 지운다.
+   */
+  todoText: string | null;
 }
 
 export function notionStatusText(totals: DayTotals): string {
@@ -36,10 +44,12 @@ export function buildRecord(
   totals: DayTotals,
   employeeName: string | null = null,
   eventLogText: string | null = null,
+  todos: TodoItem[] | null = null,
 ): DayRecordPayload {
   return {
     date: totals.date,
     eventLogText,
+    todoText: todos === null ? null : formatTodoText(todos),
     employeeName: employeeName?.trim() ? employeeName.trim() : null,
     clockInIso: totals.clockInAt === null ? null : toKstIso(totals.clockInAt),
     clockOutIso: totals.clockOutAt === null ? null : toKstIso(totals.clockOutAt),

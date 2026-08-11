@@ -48,6 +48,7 @@ import {
   type StateKeys,
 } from './storage';
 import { toDateKey } from './time';
+import { MAX_TODOS, MAX_TODO_TEXT, makeTodoId, type TodoItem } from './todos';
 import { planVacationChange, type VacationConfig } from './vacation';
 import { suggestMapping } from '../../shared/fields';
 
@@ -119,7 +120,9 @@ export class AppStore {
   private store: KeyValueStore;
   private noticeSeq = 0;
   private draining = false;
+  private redrainRequested = false;
   private lastBackendCheckAt = 0;
+  private outboxSeq = 0;
 
   private keys: StateKeys;
 
@@ -135,6 +138,9 @@ export class AppStore {
     this.store = store ?? detectStore();
     this.keys = keysFor(namespace);
     const state = backfillMapping(this.loadOrSeed(this.now()));
+    // 저장된 대기열보다 뒤에서 이어 센다. 그러지 않으면 새로 연 탭이 낮은 번호를 발급해
+    // "보내는 동안 또 바뀌었나" 판정이 한 번 어긋난다.
+    this.outboxSeq = Object.values(state.outbox).reduce((max, e) => Math.max(max, e.seq ?? 0), 0);
     this.snapshot = {
       state,
       runtime: {
@@ -327,6 +333,79 @@ export class AppStore {
     this.setState((s) => ({ ...s, vacation: { ...s.vacation, ...patch } }));
   }
 
+  // -- 업무 리스트 -------------------------------------------------------
+  //
+  // 근무 이벤트와 달리 사람이 고쳐 쓰는 값이라 append-only 가 아니다. 그래서 바꿀
+  // 때마다 `updatedAt` 을 찍는다 — 기기 간 병합에서 "마지막에 손댄 쪽"을 가리는 기준이다.
+
+  todosFor(dateKey: string): TodoItem[] {
+    return this.logFor(dateKey).todos ?? [];
+  }
+
+  private mutateTodos(dateKey: string, fn: (todos: TodoItem[]) => TodoItem[]): void {
+    const at = this.now();
+    this.setState((s) => {
+      const base = s.logs[dateKey] ?? emptyDayLog(dateKey);
+      return {
+        ...s,
+        logs: {
+          ...s.logs,
+          [dateKey]: { ...base, todos: fn(base.todos ?? []), updatedAt: at, todosAt: at },
+        },
+      };
+    });
+    this.enqueue(dateKey, { auto: true });
+  }
+
+  addTodo(dateKey: string, text: string): boolean {
+    const clean = text.trim().slice(0, MAX_TODO_TEXT);
+    if (!clean) return false;
+    if (this.todosFor(dateKey).length >= MAX_TODOS) {
+      this.notify('error', `할 일은 하루 ${MAX_TODOS}개까지 적을 수 있습니다.`);
+      return false;
+    }
+    const id = makeTodoId(this.now());
+    this.mutateTodos(dateKey, (todos) => [...todos, { id, text: clean, done: false }]);
+    return true;
+  }
+
+  toggleTodo(dateKey: string, id: string): void {
+    if (!this.todosFor(dateKey).some((t) => t.id === id)) return;
+    this.mutateTodos(dateKey, (todos) =>
+      todos.map((t) => (t.id === id ? { ...t, done: !t.done } : t)),
+    );
+  }
+
+  /** 빈 값은 무시한다 — 지우는 것은 삭제 버튼으로만 (실수로 날리지 않도록). */
+  editTodo(dateKey: string, id: string, text: string): boolean {
+    const clean = text.trim().slice(0, MAX_TODO_TEXT);
+    const current = this.todosFor(dateKey).find((t) => t.id === id);
+    if (!clean || !current || current.text === clean) return false;
+    this.mutateTodos(dateKey, (todos) =>
+      todos.map((t) => (t.id === id ? { ...t, text: clean } : t)),
+    );
+    return true;
+  }
+
+  removeTodo(dateKey: string, id: string): void {
+    if (!this.todosFor(dateKey).some((t) => t.id === id)) return;
+    this.mutateTodos(dateKey, (todos) => todos.filter((t) => t.id !== id));
+  }
+
+  /** 위/아래로 한 칸 옮긴다. 끝에서 더 가려 하면 아무 일도 하지 않는다. */
+  moveTodo(dateKey: string, id: string, direction: -1 | 1): void {
+    const todos = this.todosFor(dateKey);
+    const from = todos.findIndex((t) => t.id === id);
+    const to = from + direction;
+    if (from < 0 || to < 0 || to >= todos.length) return;
+    this.mutateTodos(dateKey, (list) => {
+      const next = [...list];
+      const [moved] = next.splice(from, 1);
+      if (moved) next.splice(to, 0, moved);
+      return next;
+    });
+  }
+
   // -- 설정 -------------------------------------------------------------
   updateNotionSettings(patch: Partial<NotionSettings>) {
     this.setState((s) => ({ ...s, notion: { ...s.notion, ...patch } }));
@@ -473,6 +552,7 @@ export class AppStore {
 
   // -- 동기화 outbox -----------------------------------------------------
   enqueue(dateKey: string, opts: { auto?: boolean } = {}) {
+    const seq = ++this.outboxSeq;
     this.setState((s) => ({
       ...s,
       outbox: {
@@ -483,10 +563,16 @@ export class AppStore {
           nextAttemptAt: 0,
           lastError: null,
           queuedAt: s.outbox[dateKey]?.queuedAt ?? this.now(),
+          seq,
         },
       },
     }));
-    if (opts.auto && this.snapshot.state.notion.autoSync) void this.drainOutbox();
+    if (!opts.auto || !this.snapshot.state.notion.autoSync) return;
+    // 이미 한 건을 보내는 중이면 그 회차는 이 항목을 못 본다. 표시해 두었다가
+    // 끝나는 즉시 한 번 더 돌린다 — 그러지 않으면 방금 적은 할 일이 다음
+    // 주기(1분)까지 Notion 에 안 간다.
+    if (this.draining) this.redrainRequested = true;
+    else void this.drainOutbox();
   }
 
   /**
@@ -612,6 +698,10 @@ export class AppStore {
     } finally {
       this.draining = false;
       this.setRuntime({ syncing: false });
+      if (this.redrainRequested) {
+        this.redrainRequested = false;
+        void this.drainOutbox();
+      }
     }
   }
 
@@ -655,6 +745,7 @@ export class AppStore {
       computeDay(log, this.now()),
       notion.employeeName,
       serializeDayLog(log),
+      log.todos ?? null,
     );
 
     try {
@@ -672,7 +763,15 @@ export class AppStore {
       const warning = res.duplicateWarning ?? res.foreignRowWarning ?? null;
       this.setState((s) => {
         const outbox = { ...s.outbox };
-        delete outbox[dateKey];
+        // 보내는 동안 같은 날짜가 또 바뀌었다면(할 일을 연달아 적는 경우가 흔하다)
+        // 방금 보낸 페이로드는 이미 낡았다. 큐에 남겨 곧바로 다시 보낸다.
+        const latest = outbox[dateKey];
+        if (latest && latest.seq !== entry.seq) {
+          outbox[dateKey] = { ...latest, attempts: 0, nextAttemptAt: 0, lastError: null };
+          this.redrainRequested = true;
+        } else {
+          delete outbox[dateKey];
+        }
         return {
           ...s,
           outbox,

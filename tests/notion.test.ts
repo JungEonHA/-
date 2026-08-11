@@ -52,6 +52,7 @@ const RECORD: DayRecordPayload = {
   date: '2026-08-10',
   employeeName: null,
   eventLogText: null,
+  todoText: null,
   clockInIso: '2026-08-10T09:00:00+09:00',
   clockOutIso: '2026-08-10T18:00:00+09:00',
   clockInText: '09:00',
@@ -720,5 +721,71 @@ describe('API 라우터', () => {
       fetchImpl: mock.fetchImpl,
     });
     expect(res.status).toBe(404);
+  });
+});
+
+describe('업무 리스트 쓰기 규칙', () => {
+  const withTodos = (todoText: string | null): DayRecordPayload => ({ ...RECORD, todoText });
+
+  it('체크리스트 텍스트를 매핑된 텍스트 칸에 쓴다', async () => {
+    const mock = realisticMock();
+    mock.properties['업무 리스트'] = { id: 'p13', type: 'rich_text' };
+    const schema = await fetchDatabaseSchema(makeClient(mock), DB_ID);
+
+    const { properties } = buildProperties(
+      schema,
+      { date: '근무 일자', todos: '업무 리스트' },
+      withTodos('☑ 한 일\n☐ 남은 일'),
+    );
+
+    expect(properties['업무 리스트']).toEqual({
+      rich_text: [{ type: 'text', text: { content: '☑ 한 일\n☐ 남은 일' } }],
+    });
+  });
+
+  it('목록을 비우면 그 칸을 지운다', async () => {
+    const mock = realisticMock();
+    mock.properties['업무 리스트'] = { id: 'p13', type: 'rich_text' };
+    const schema = await fetchDatabaseSchema(makeClient(mock), DB_ID);
+
+    const { properties } = buildProperties(
+      schema,
+      { date: '근무 일자', todos: '업무 리스트' },
+      withTodos(''),
+    );
+
+    expect(properties['업무 리스트']).toEqual({ rich_text: [] });
+  });
+
+  it('목록을 모르는 기기가 보내면 그 칸을 건드리지 않는다', async () => {
+    const mock = realisticMock();
+    mock.properties['업무 리스트'] = { id: 'p13', type: 'rich_text' };
+    const schema = await fetchDatabaseSchema(makeClient(mock), DB_ID);
+
+    const { properties, skipped } = buildProperties(
+      schema,
+      { date: '근무 일자', todos: '업무 리스트' },
+      withTodos(null),
+    );
+
+    expect(properties['업무 리스트']).toBeUndefined();
+    expect(skipped.some((s) => s.field === 'todos')).toBe(true);
+  });
+
+  it('제목 칸에 매핑돼도 제목을 덮어쓰지 않는다', async () => {
+    // 텍스트 칸만 후보로 내주지만, 낡은 설정이 남아 있을 수 있다.
+    const mock = realisticMock();
+    const schema = await fetchDatabaseSchema(makeClient(mock), DB_ID);
+
+    const { properties, skipped } = buildProperties(
+      schema,
+      { title: '기록명', todos: '기록명' },
+      withTodos('☐ 무언가'),
+    );
+
+    expect(properties['기록명']).toEqual({
+      title: [{ type: 'text', text: { content: '2026-08-10 근무기록' } }],
+    });
+    expect(skipped.some((s) => s.field === 'todos')).toBe(true);
   });
 });
