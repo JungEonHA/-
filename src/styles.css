@@ -617,7 +617,11 @@ button { font-family: inherit; }
   left: 0; right: 0; bottom: 0;
   z-index: 30;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* 칸 수를 못 박으면 탭이 하나 늘 때마다 줄이 접힌다. 흐름을 가로로 두면
+     탭이 몇 개든 한 줄에 남고, minmax(0,·) 가 있어야 좁은 화면에서 폭을
+     넘기는 대신 칸이 줄어든다. */
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   background: color-mix(in srgb, var(--surface) 94%, transparent);
   backdrop-filter: blur(14px);
   border-top: 1px solid var(--border);
@@ -647,7 +651,7 @@ button { font-family: inherit; }
     top: 58px;
     max-width: 1120px;
     margin: 0 auto;
-    grid-template-columns: repeat(4, max-content);
+    grid-auto-columns: max-content;
     gap: 4px;
     background: transparent;
     backdrop-filter: none;
