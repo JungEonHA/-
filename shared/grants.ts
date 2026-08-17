@@ -10,7 +10,7 @@
  * 기기에서만 보이고 정작 휴가를 쓰는 사람 기기에서는 잔량이 그대로다. 이 앱의 기기 간
  * 공유 수단은 Notion 뿐이므로 부여도 거기 둔다.
  *
- * 행 모양: 제목 `YYYY-MM-DD <이름> 특별부여` · 구분 `특별부여` · 부여시간(number) · 사유(text)
+ * 행 모양: 제목 `특별 휴가 부여 (N시간)` · 구분 `특별부여` · 부여시간(number) · 사유(text)
  * `근무일` 은 "언제부터 쓸 수 있는가"를 정한다 — 그 달부터 잔량에 더해진다.
  */
 
@@ -38,8 +38,19 @@ export interface VacationGrant {
   reason: string;
 }
 
-export function grantTitle(dateKey: string, employeeName: string | null): string {
-  return `${dateKey}${employeeName ? ` ${employeeName}` : ''} ${GRANT_KIND}`;
+/**
+ * 부여 행의 제목.
+ *
+ * 매월 자동 지급 행이 `월 8시간 휴가 부여` 로 적히므로 특별 부여도 같은 어투로 맞춘다
+ * (2026-08-18 CEO 요청). 날짜와 이름은 제목에 넣지 않는다 — `근무일`·`직원` 칸에 이미 있고,
+ * 자동 지급 행도 넣지 않기 때문이다.
+ *
+ * 주의: 일일 근무 행은 `appRowTitle` 로만 소유권을 판별하므로 이 제목과 절대 겹치지 않는다.
+ * 부여 행을 알아보는 기준은 여전히 제목이 아니라 `부여시간` Property 다.
+ */
+export function grantTitle(hours: number): string {
+  const n = Number.isInteger(hours) ? String(hours) : String(Math.round(hours * 100) / 100);
+  return `특별 휴가 부여 (${n}시간)`;
 }
 
 /** `monthKey`(YYYY-MM) 까지 부여된 누계(ms). 미래에 부여된 건은 아직 세지 않는다. */

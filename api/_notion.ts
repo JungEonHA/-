@@ -875,7 +875,7 @@ export async function createGrant(args: {
 
   const titleProp = schema.properties.find((p) => p.type === 'title');
   if (titleProp) {
-    properties[titleProp.name] = { title: [{ text: { content: grantTitle(dateKey, employeeName) } }] };
+    properties[titleProp.name] = { title: [{ text: { content: grantTitle(hours) } }] };
   }
 
   // 구분 값은 노션 표에서 사람이 알아보라고 적는 보조 표시다. 읽을 때는 쓰지 않으므로

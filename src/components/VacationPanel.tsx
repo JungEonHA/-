@@ -15,7 +15,7 @@ import { Banner, Card, EmptyState, Tile } from './ui';
 const PRESET_HOURS = [1, 2, 4, 8] as const;
 
 /** 부여 사유로 자주 쓰는 것들. 눌러서 채우고 그대로 고쳐 쓸 수 있다. */
-const REASON_PRESETS = ['전시 참가', '천재지변', '집안 사정', '포상'] as const;
+const REASON_PRESETS = ['특별 휴가', '개인 일정', '천재지변', '집안 사정', '포상'] as const;
 
 /**
  * 휴가 화면.
@@ -98,7 +98,7 @@ export function VacationPanel({ now }: { now: number }) {
         <div className="mt12">
           <Banner kind="info">
             사용하지 않은 휴가는 소멸하지 않고 다음 달로 이월됩니다. 휴가 시간은 실제 근무시간을
-            대체하여 <b>인정 근무시간</b>에 합산됩니다. 전시 참가·천재지변처럼 사유가 있는 휴가는
+            대체하여 <b>인정 근무시간</b>에 합산됩니다. 개인 일정·천재지변처럼 사유가 있는 휴가는
             아래 <b>특별 휴가 부여</b>로 따로 얹습니다 — 매달 지급량은 그대로 두고 그 달에만 더해집니다.
           </Banner>
         </div>
@@ -217,7 +217,7 @@ export function VacationPanel({ now }: { now: number }) {
             id="grant-reason"
             className="input"
             type="text"
-            placeholder="예: BIC 전시 참가"
+            placeholder="예: 특별 휴가"
             value={grantReason}
             data-testid="grant-reason"
             onChange={(e) => setGrantReason(e.target.value)}
