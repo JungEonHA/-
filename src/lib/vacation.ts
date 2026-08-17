@@ -3,6 +3,8 @@
  *
  * 규칙
  *  - 매월 정해진 시간(기본 8시간)이 지급된다.
+ *  - 그 밖에 사유를 달아 **특별 부여**한 시간이 더해진다 (전시 참가·천재지변 등).
+ *    월 지급량을 올리는 것과 달리 그 달 한 번만 얹히고, 부여 내역은 Notion 에 남는다.
  *  - 쓰지 않은 휴가는 다음 달로 **이월**된다 (소멸 없음).
  *  - 사용 내역은 DayLog.vacationMs 에 날짜별로 저장된다 — 별도 원장을 두지 않아
  *    "근무기록"과 "휴가사용"이 어긋날 여지를 없앤다.
@@ -13,6 +15,8 @@
  */
 
 import type { DayLog } from './events';
+import type { VacationGrant } from '../../shared/grants';
+import { grantedExtraIn, grantedExtraThrough } from '../../shared/grants';
 import { HOUR_MS, addMonths, monthDiff, toMonthKey } from './time';
 
 export const DEFAULT_MONTHLY_GRANT_MS = 8 * HOUR_MS;
@@ -29,11 +33,13 @@ export interface VacationConfig {
 
 export interface VacationBalance {
   monthKey: string;
-  /** 이번 달 지급 */
+  /** 이번 달 지급 (정기) */
   grantedThisMonth: number;
-  /** 이월 (이전 달까지의 지급 누계 − 사용 누계) */
+  /** 이번 달 특별 부여 (사유가 붙은 추가 지급) */
+  extraThisMonth: number;
+  /** 이월 (이전 달까지의 지급+부여 누계 − 사용 누계) */
   carriedIn: number;
-  /** 사용 가능 = 이월 + 이번 달 지급 */
+  /** 사용 가능 = 이월 + 이번 달 지급 + 이번 달 특별 부여 */
   available: number;
   /** 이번 달 사용 */
   usedThisMonth: number;
@@ -61,23 +67,28 @@ export function computeBalance(
   logs: Record<string, DayLog>,
   config: VacationConfig,
   monthKey: string,
+  grants: VacationGrant[] = [],
 ): VacationBalance {
   const prevMonth = addMonths(monthKey, -1);
   const monthPrefix = `${monthKey}-`;
 
-  const grantedBefore = grantedThrough(config, prevMonth);
+  // 이월분에도 지난달까지의 특별 부여가 포함돼야 한다. 빠뜨리면 전달에 부여한
+  // 휴가가 그 달을 넘기는 순간 사라져 버린다.
+  const grantedBefore = grantedThrough(config, prevMonth) + grantedExtraThrough(grants, prevMonth);
   const usedBefore = sumVacation(logs, (d) => d.slice(0, 7) < monthKey);
   const carriedIn = grantedBefore - usedBefore;
 
   const grantedThisMonth =
     monthDiff(config.grantStartMonth, monthKey) >= 0 ? config.monthlyGrantMs : 0;
+  const extraThisMonth = grantedExtraIn(grants, monthKey);
 
   const usedThisMonth = sumVacation(logs, (d) => d.startsWith(monthPrefix));
-  const available = carriedIn + grantedThisMonth;
+  const available = carriedIn + grantedThisMonth + extraThisMonth;
 
   return {
     monthKey,
     grantedThisMonth,
+    extraThisMonth,
     carriedIn,
     available,
     usedThisMonth,
@@ -105,6 +116,7 @@ export function planVacationChange(
   config: VacationConfig,
   dateKey: string,
   deltaMs: number,
+  grants: VacationGrant[] = [],
 ): VacationChangeResult {
   if (!Number.isFinite(deltaMs) || deltaMs === 0) {
     return { ok: false, reason: '변경할 휴가 시간을 선택하세요.' };
@@ -128,7 +140,7 @@ export function planVacationChange(
 
   if (deltaMs > 0) {
     const monthKey = dateKey.slice(0, 7);
-    const balance = computeBalance(logs, config, monthKey);
+    const balance = computeBalance(logs, config, monthKey, grants);
     if (deltaMs > balance.remaining) {
       return {
         ok: false,

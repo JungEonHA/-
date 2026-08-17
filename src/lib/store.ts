@@ -21,9 +21,12 @@ import { buildRecord } from './record';
 import {
   ApiError,
   addProperties as apiAddProperties,
+  addGrant as apiAddGrant,
   getDay,
+  getGrants,
   getHealth,
   getSchema,
+  revokeGrant as apiRevokeGrant,
   upsertRecord,
   type ClientConfig,
   type HealthInfo,
@@ -305,8 +308,8 @@ export class AppStore {
 
   // -- 휴가 -------------------------------------------------------------
   changeVacation(dateKey: string, deltaMs: number): boolean {
-    const { logs, vacation } = this.snapshot.state;
-    const plan = planVacationChange(logs, vacation, dateKey, deltaMs);
+    const { logs, vacation, grants } = this.snapshot.state;
+    const plan = planVacationChange(logs, vacation, dateKey, deltaMs, grants);
     if (!plan.ok) {
       this.notify('error', plan.reason);
       return false;
@@ -332,6 +335,83 @@ export class AppStore {
 
   updateVacationConfig(patch: Partial<VacationConfig>) {
     this.setState((s) => ({ ...s, vacation: { ...s.vacation, ...patch } }));
+  }
+
+  // -- 특별 휴가 부여 ----------------------------------------------------
+  //
+  // 부여는 근무 이벤트와 달리 **Notion 이 원본**이다. 부여한 사람과 쓰는 사람이
+  // 다른 기기를 쓰기 때문에, 로컬에만 두면 정작 본인 화면에서는 잔량이 안 늘어난다.
+  // 그래서 로컬 상태는 캐시로만 두고 서버 값으로 통째로 갈아끼운다.
+
+  /** Notion 에서 부여 목록을 다시 읽어 온다. 실패해도 캐시는 유지한다. */
+  async pullGrants(opts: { notify?: boolean } = {}): Promise<void> {
+    if (this.backendStatus() !== 'ready') {
+      await this.checkBackend({ force: opts.notify === true });
+      if (this.backendStatus() !== 'ready') return;
+    }
+
+    try {
+      const { employeeName, mapping } = this.snapshot.state.notion;
+      const res = await getGrants(this.clientConfig(), {
+        employeeName: employeeName.trim() || null,
+        mapping,
+      });
+      this.setState((s) => ({ ...s, grants: res.grants }));
+      if (opts.notify) this.notify('success', `특별 휴가 부여 ${res.grants.length}건을 불러왔습니다.`);
+    } catch (err) {
+      if (opts.notify) this.notify('error', `부여 내역을 가져오지 못했습니다: ${(err as Error).message}`);
+    }
+  }
+
+  /** 사유를 달아 특별 휴가를 부여한다. 성공하면 목록을 다시 읽는다. */
+  async grantVacation(args: { dateKey: string; hours: number; reason: string }): Promise<boolean> {
+    const reason = args.reason.trim();
+    if (!reason) {
+      this.notify('error', '부여 사유를 입력하세요.');
+      return false;
+    }
+    if (!Number.isFinite(args.hours) || args.hours <= 0) {
+      this.notify('error', '부여 시간은 0보다 커야 합니다.');
+      return false;
+    }
+
+    if (this.backendStatus() !== 'ready') {
+      await this.checkBackend({ force: true });
+      if (this.backendStatus() !== 'ready') {
+        this.notify('error', 'Notion 에 연결돼 있어야 부여할 수 있습니다.');
+        return false;
+      }
+    }
+
+    try {
+      const { employeeName, mapping } = this.snapshot.state.notion;
+      await apiAddGrant(this.clientConfig(), {
+        employeeName: employeeName.trim() || null,
+        dateKey: args.dateKey,
+        hours: args.hours,
+        reason,
+        mapping,
+      });
+      await this.pullGrants();
+      this.notify('success', `${args.dateKey} 특별 휴가 ${args.hours}시간을 부여했습니다.`);
+      return true;
+    } catch (err) {
+      this.notify('error', `부여하지 못했습니다: ${(err as Error).message}`);
+      return false;
+    }
+  }
+
+  /** 부여를 되돌린다 (Notion 휴지통으로 이동 — 복구 가능). */
+  async revokeVacationGrant(id: string): Promise<boolean> {
+    try {
+      await apiRevokeGrant(this.clientConfig(), id);
+      this.setState((s) => ({ ...s, grants: s.grants.filter((g) => g.id !== id) }));
+      this.notify('success', '부여를 취소했습니다.');
+      return true;
+    } catch (err) {
+      this.notify('error', `취소하지 못했습니다: ${(err as Error).message}`);
+      return false;
+    }
   }
 
   // -- 업무 리스트 -------------------------------------------------------

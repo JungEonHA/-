@@ -133,3 +133,79 @@ describe('사용 내역', () => {
     expect(history.map((h) => h.dateKey)).toEqual(['2026-03-05', '2026-01-10']);
   });
 });
+
+describe('특별 휴가 부여', () => {
+  const grant = (id: string, dateKey: string, hours: number, reason = '전시 참가') => ({
+    id,
+    dateKey,
+    ms: hours * HOUR_MS,
+    reason,
+  });
+
+  it('부여가 없으면 기존 계산과 같다', () => {
+    const logs = logsWith({ '2026-08-13': 3 });
+    expect(computeBalance(logs, CONFIG, '2026-08', []).available).toBe(
+      computeBalance(logs, CONFIG, '2026-08').available,
+    );
+  });
+
+  it('그 달 부여가 사용 가능 시간에 더해진다', () => {
+    const b = computeBalance({}, CONFIG, '2026-08', [grant('g1', '2026-08-13', 16)]);
+    expect(b.extraThisMonth).toBe(16 * HOUR_MS);
+    // 1~8월 정기 지급 64h + 특별 16h
+    expect(b.available).toBe(b.carriedIn + b.grantedThisMonth + 16 * HOUR_MS);
+  });
+
+  it('실제 사례: 정기 8h 를 남긴 채 특별 16h 를 부여받아 16h 를 쓴다', () => {
+    const config = { ...CONFIG, grantStartMonth: '2026-08' };
+    const logs = logsWith({
+      '2026-08-13': 3,
+      '2026-08-14': 1,
+      '2026-08-15': 6,
+      '2026-08-16': 6,
+    });
+    const b = computeBalance(logs, config, '2026-08', [grant('g1', '2026-08-13', 16, 'BIC 전시 참가')]);
+
+    expect(b.grantedThisMonth).toBe(8 * HOUR_MS);
+    expect(b.extraThisMonth).toBe(16 * HOUR_MS);
+    expect(b.usedThisMonth).toBe(16 * HOUR_MS);
+    // 특별 부여분을 정확히 다 쓰고 정기 휴가 8시간은 그대로 남는다
+    expect(b.remaining).toBe(8 * HOUR_MS);
+  });
+
+  it('쓰지 않은 부여는 다음 달로 이월된다', () => {
+    const config = { ...CONFIG, grantStartMonth: '2026-08' };
+    const grants = [grant('g1', '2026-08-13', 16)];
+
+    const sep = computeBalance({}, config, '2026-09', grants);
+    // 8월 정기 8h + 특별 16h 가 통째로 이월되고 9월 정기 8h 가 더해진다
+    expect(sep.carriedIn).toBe(24 * HOUR_MS);
+    expect(sep.extraThisMonth).toBe(0);
+    expect(sep.available).toBe(32 * HOUR_MS);
+  });
+
+  it('미래에 부여된 건은 아직 세지 않는다', () => {
+    const b = computeBalance({}, CONFIG, '2026-08', [grant('g1', '2026-09-01', 16)]);
+    expect(b.extraThisMonth).toBe(0);
+    expect(b.available).toBe(b.carriedIn + b.grantedThisMonth);
+  });
+
+  it('부여 덕분에 정기 잔량을 넘는 사용도 허용된다', () => {
+    const config = { ...CONFIG, grantStartMonth: '2026-08' };
+    const grants = [grant('g1', '2026-08-01', 16)];
+
+    // 부여가 없으면 하루 8h 를 쓰고 나면 더 못 쓴다
+    const withoutGrant = planVacationChange(logsWith({ '2026-08-13': 8 }), config, '2026-08-14', 6 * HOUR_MS);
+    expect(withoutGrant.ok).toBe(false);
+
+    // 부여가 있으면 통과한다
+    const withGrant = planVacationChange(
+      logsWith({ '2026-08-13': 8 }),
+      config,
+      '2026-08-14',
+      6 * HOUR_MS,
+      grants,
+    );
+    expect(withGrant.ok).toBe(true);
+  });
+});

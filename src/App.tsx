@@ -60,6 +60,9 @@ export default function App({ widget = false }: { widget?: boolean }) {
   useEffect(() => {
     void store.pullDay(toDateKey(Date.now()));
     void store.pullDay(toDateKey(Date.now() - DAY_MS));
+    // 특별 휴가 부여는 다른 사람(대표)이 다른 기기에서 넣는다. 열 때마다 확인하지
+    // 않으면 본인 화면의 잔여 휴가가 계속 옛날 값으로 남는다.
+    void store.pullGrants();
 
     let lastPullAt = Date.now();
     const pull = () => {
@@ -67,6 +70,7 @@ export default function App({ widget = false }: { widget?: boolean }) {
       if (Date.now() - lastPullAt < PULL_THROTTLE_MS) return;
       lastPullAt = Date.now();
       void store.pullDay(store.activeDate);
+      void store.pullGrants();
     };
     document.addEventListener('visibilitychange', pull);
     window.addEventListener('focus', pull);

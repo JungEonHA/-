@@ -14,6 +14,9 @@ import { Banner, Card, EmptyState, Tile } from './ui';
 
 const PRESET_HOURS = [1, 2, 4, 8] as const;
 
+/** 부여 사유로 자주 쓰는 것들. 눌러서 채우고 그대로 고쳐 쓸 수 있다. */
+const REASON_PRESETS = ['전시 참가', '천재지변', '집안 사정', '포상'] as const;
+
 /**
  * 휴가 화면.
  * 잔여량은 저장된 값이 아니라 "지급 누계 − 사용 누계"로 매번 다시 계산한다.
@@ -26,7 +29,13 @@ export function VacationPanel({ now }: { now: number }) {
   const [dateKey, setDateKey] = useState(() => toDateKey(now));
   const [hours, setHours] = useState<number>(1);
 
-  const balance = computeBalance(state.logs, state.vacation, monthKey);
+  const [grantDate, setGrantDate] = useState(() => toDateKey(now));
+  const [grantHours, setGrantHours] = useState<string>('8');
+  const [grantReason, setGrantReason] = useState('');
+  const [granting, setGranting] = useState(false);
+
+  const balance = computeBalance(state.logs, state.vacation, monthKey, state.grants);
+  const monthGrants = state.grants.filter((g) => g.dateKey.slice(0, 7) === monthKey);
   const history = vacationHistory(state.logs);
   const dayUsed = state.logs[dateKey]?.vacationMs ?? 0;
 
@@ -62,6 +71,11 @@ export function VacationPanel({ now }: { now: number }) {
             value={formatDurationKo(balance.grantedThisMonth)}
             testId="vac-granted"
           />
+          <Tile
+            label="특별 부여"
+            value={formatDurationKo(balance.extraThisMonth)}
+            testId="vac-extra"
+          />
           <Tile label="이월" value={formatDurationKo(balance.carriedIn)} testId="vac-carried" />
           <Tile
             label="사용 가능"
@@ -84,7 +98,8 @@ export function VacationPanel({ now }: { now: number }) {
         <div className="mt12">
           <Banner kind="info">
             사용하지 않은 휴가는 소멸하지 않고 다음 달로 이월됩니다. 휴가 시간은 실제 근무시간을
-            대체하여 <b>인정 근무시간</b>에 합산됩니다.
+            대체하여 <b>인정 근무시간</b>에 합산됩니다. 전시 참가·천재지변처럼 사유가 있는 휴가는
+            아래 <b>특별 휴가 부여</b>로 따로 얹습니다 — 매달 지급량은 그대로 두고 그 달에만 더해집니다.
           </Banner>
         </div>
       </Card>
@@ -147,6 +162,133 @@ export function VacationPanel({ now }: { now: number }) {
           하루 최대 {state.vacation.dailyCapMs / HOUR_MS}시간까지 사용할 수 있으며, 잔여 휴가를
           초과하면 사용할 수 없습니다. 변경 사항은 Notion에도 함께 반영됩니다.
         </p>
+      </Card>
+
+      <Card
+        title="특별 휴가 부여"
+        hint={`${formatMonthKeyKo(monthKey)} ${monthGrants.length}건`}
+        action={
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            data-testid="btn-grant-refresh"
+            onClick={() => void store.pullGrants({ notify: true })}
+          >
+            새로고침
+          </button>
+        }
+      >
+        <div className="field">
+          <label className="field__label" htmlFor="grant-date">
+            기준일
+          </label>
+          <input
+            id="grant-date"
+            className="input"
+            type="date"
+            value={grantDate}
+            data-testid="grant-date"
+            onChange={(e) => e.target.value && setGrantDate(e.target.value)}
+          />
+          <span className="field__hint">이 날이 속한 달부터 쓸 수 있습니다.</span>
+        </div>
+
+        <div className="field">
+          <label className="field__label" htmlFor="grant-hours">
+            부여 시간
+          </label>
+          <input
+            id="grant-hours"
+            className="input"
+            type="number"
+            min="0.5"
+            step="0.5"
+            value={grantHours}
+            data-testid="grant-hours"
+            onChange={(e) => setGrantHours(e.target.value)}
+          />
+        </div>
+
+        <div className="field">
+          <label className="field__label" htmlFor="grant-reason">
+            사유
+          </label>
+          <input
+            id="grant-reason"
+            className="input"
+            type="text"
+            placeholder="예: BIC 전시 참가"
+            value={grantReason}
+            data-testid="grant-reason"
+            onChange={(e) => setGrantReason(e.target.value)}
+          />
+          <div className="segmented mt8">
+            {REASON_PRESETS.map((r) => (
+              <button
+                key={r}
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={() => setGrantReason(r)}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="btnRow mt8">
+          <button
+            type="button"
+            className="btn btn--primary"
+            data-testid="btn-grant-add"
+            disabled={granting || !grantReason.trim() || !(Number(grantHours) > 0)}
+            onClick={() => {
+              setGranting(true);
+              void store
+                .grantVacation({
+                  dateKey: grantDate,
+                  hours: Number(grantHours),
+                  reason: grantReason.trim(),
+                })
+                .then((ok) => {
+                  if (ok) setGrantReason('');
+                })
+                .finally(() => setGranting(false));
+            }}
+          >
+            {granting ? '부여 중…' : '특별 휴가 부여'}
+          </button>
+        </div>
+
+        <p className="field__hint mt12">
+          사유는 반드시 남겨야 합니다. 부여 내역은 Notion 에 행으로 저장되어 두 사람의 기기에서
+          모두 같은 잔여 휴가가 보입니다.
+        </p>
+
+        <div className="mt12">
+          {monthGrants.length === 0 ? (
+            <EmptyState>이 달에 부여된 특별 휴가가 없습니다.</EmptyState>
+          ) : (
+            <div className="list" data-testid="grant-list">
+              {monthGrants.map((g) => (
+                <div className="listRow" key={g.id}>
+                  <div className="listRow__main">
+                    <div className="listRow__title">{g.reason || '(사유 없음)'}</div>
+                    <div className="listRow__sub">{formatDateKeyKo(g.dateKey)}</div>
+                  </div>
+                  <div className="listRow__value">{formatDurationKo(g.ms)}</div>
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => void store.revokeVacationGrant(g.id)}
+                  >
+                    부여 취소
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </Card>
 
       <Card title="사용 내역" hint="최근 12건">

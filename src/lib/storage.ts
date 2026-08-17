@@ -12,6 +12,7 @@
 import type { LogicalField } from '../../shared/fields';
 import type { DayLog } from './events';
 import type { VacationConfig } from './vacation';
+import type { VacationGrant } from '../../shared/grants';
 import { defaultVacationConfig } from './vacation';
 import { normalizeTodos } from './todos';
 
@@ -110,6 +111,11 @@ export interface AppState {
   version: 1;
   logs: Record<string, DayLog>;
   vacation: VacationConfig;
+  /**
+   * 특별 휴가 부여 목록. 원본은 Notion 에 있고 여기 있는 것은 캐시다 —
+   * 오프라인에서도 잔량을 보여 주기 위해 저장하지만, 연결되면 서버 값으로 덮어쓴다.
+   */
+  grants: VacationGrant[];
   notion: NotionSettings;
   outbox: Record<string, OutboxEntry>;
   lastSyncAt: number | null;
@@ -121,6 +127,7 @@ export function createInitialState(now: number): AppState {
     version: 1,
     logs: {},
     vacation: defaultVacationConfig(now),
+    grants: [],
     notion: {
       autoSync: true,
       apiBase: '',
@@ -249,6 +256,24 @@ export function normalizeState(raw: unknown, now: number): AppState {
         : base.vacation.dailyCapMs,
   };
 
+  // 부여 캐시. 형식이 깨진 항목은 조용히 버린다 — 잔량 계산이 NaN 이 되는 것보다 낫다.
+  const grants: VacationGrant[] = [];
+  if (Array.isArray(obj.grants)) {
+    for (const g of obj.grants) {
+      if (!g || typeof g !== 'object') continue;
+      const ms = typeof g.ms === 'number' && Number.isFinite(g.ms) ? Math.max(0, g.ms) : 0;
+      if (ms <= 0) continue;
+      if (typeof g.id !== 'string' || !g.id) continue;
+      if (typeof g.dateKey !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(g.dateKey)) continue;
+      grants.push({
+        id: g.id,
+        dateKey: g.dateKey,
+        ms,
+        reason: typeof g.reason === 'string' ? g.reason : '',
+      });
+    }
+  }
+
   const n: Partial<NotionSettings> = obj.notion ?? {};
   const notion: NotionSettings = {
     autoSync: typeof n.autoSync === 'boolean' ? n.autoSync : true,
@@ -291,6 +316,7 @@ export function normalizeState(raw: unknown, now: number): AppState {
     version: 1,
     logs,
     vacation,
+    grants,
     notion,
     outbox,
     lastSyncAt: typeof obj.lastSyncAt === 'number' ? obj.lastSyncAt : null,

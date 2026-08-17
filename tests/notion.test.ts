@@ -789,3 +789,150 @@ describe('업무 리스트 쓰기 규칙', () => {
     expect(skipped.some((s) => s.field === 'todos')).toBe(true);
   });
 });
+
+describe('특별 휴가 부여 API', () => {
+  function grantMock() {
+    return new NotionMock({
+      databaseId: DB_ID,
+      properties: {
+        이름: { id: 'p1', type: 'title' },
+        근무일: { id: 'p2', type: 'date' },
+        구분: { id: 'p3', type: 'select', options: ['근무', '휴가', '특별부여'] },
+        직원: { id: 'p4', type: 'select', options: ['하정언', '박진규'] },
+      },
+    });
+  }
+
+  const mapping = JSON.stringify({
+    title: '이름',
+    date: '근무일',
+    status: '구분',
+    employee: '직원',
+  });
+
+  it('부여하면 사유와 시간이 담긴 행이 생기고 전용 칸이 자동으로 만들어진다', async () => {
+    const mock = grantMock();
+
+    const res = await handleApiRequest(
+      req({
+        method: 'POST',
+        path: '/notion/grants',
+        body: {
+          employee: '박진규',
+          dateKey: '2026-08-13',
+          hours: 16,
+          reason: 'BIC 전시 참가',
+          mapping: JSON.parse(mapping),
+        },
+      }),
+      { env: envFor(mock), fetchImpl: mock.fetchImpl, sleep: async () => {} },
+    );
+
+    expect(res.status).toBe(200);
+    expect(mock.properties['부여시간']?.type).toBe('number');
+    expect(mock.properties['사유']?.type).toBe('rich_text');
+
+    const page = mock.pages.at(-1)!;
+    expect(page.properties['부여시간']).toEqual({ number: 16 });
+    expect(page.properties['구분']).toEqual({ select: { name: '특별부여' } });
+    expect(page.properties['직원']).toEqual({ select: { name: '박진규' } });
+    expect(page.properties['근무일']).toEqual({ date: { start: '2026-08-13' } });
+  });
+
+  it('사유가 없으면 거부한다 — 나중에 근거를 확인할 수 없기 때문', async () => {
+    const mock = grantMock();
+    const res = await handleApiRequest(
+      req({
+        method: 'POST',
+        path: '/notion/grants',
+        body: { employee: '박진규', dateKey: '2026-08-13', hours: 8, reason: '   ' },
+      }),
+      { env: envFor(mock), fetchImpl: mock.fetchImpl, sleep: async () => {} },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('0 이하 시간은 거부한다', async () => {
+    const mock = grantMock();
+    const res = await handleApiRequest(
+      req({
+        method: 'POST',
+        path: '/notion/grants',
+        body: { employee: '박진규', dateKey: '2026-08-13', hours: 0, reason: '전시' },
+      }),
+      { env: envFor(mock), fetchImpl: mock.fetchImpl, sleep: async () => {} },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('부여를 읽어 오고, 그 사람 것만 돌려준다', async () => {
+    const mock = grantMock();
+    const deps = { env: envFor(mock), fetchImpl: mock.fetchImpl, sleep: async () => {} };
+
+    for (const [employee, hours, reason] of [
+      ['박진규', 16, 'BIC 전시 참가'],
+      ['하정언', 4, '집안 사정'],
+    ] as const) {
+      await handleApiRequest(
+        req({
+          method: 'POST',
+          path: '/notion/grants',
+          body: { employee, dateKey: '2026-08-13', hours, reason, mapping: JSON.parse(mapping) },
+        }),
+        deps,
+      );
+    }
+
+    const res = await handleApiRequest(
+      req({ method: 'GET', path: '/notion/grants', query: { employee: '박진규', mapping } }),
+      deps,
+    );
+
+    expect(res.status).toBe(200);
+    const body = res.body as { grants: Array<{ ms: number; reason: string; dateKey: string }> };
+    expect(body.grants).toHaveLength(1);
+    expect(body.grants[0]!.ms).toBe(16 * 3600000);
+    expect(body.grants[0]!.reason).toBe('BIC 전시 참가');
+    expect(body.grants[0]!.dateKey).toBe('2026-08-13');
+  });
+
+  it('근무 기록 행은 부여로 읽히지 않는다', async () => {
+    const mock = grantMock();
+    const deps = { env: envFor(mock), fetchImpl: mock.fetchImpl, sleep: async () => {} };
+
+    // 평범한 근무 기록 행 하나
+    mock.pages.push({
+      id: 'work1',
+      properties: {
+        이름: { title: [{ text: { content: '2026-08-13 박진규 근무기록' } }] },
+        구분: { select: { name: '근무' } },
+        직원: { select: { name: '박진규' } },
+        근무일: { date: { start: '2026-08-13' } },
+      },
+    } as any);
+
+    const res = await handleApiRequest(
+      req({ method: 'GET', path: '/notion/grants', query: { employee: '박진규', mapping } }),
+      deps,
+    );
+
+    expect((res.body as { grants: unknown[] }).grants).toHaveLength(0);
+  });
+
+  it('쓰기가 꺼져 있으면 부여하지 못한다', async () => {
+    const mock = grantMock();
+    const res = await handleApiRequest(
+      req({
+        method: 'POST',
+        path: '/notion/grants',
+        body: { employee: '박진규', dateKey: '2026-08-13', hours: 8, reason: '전시' },
+      }),
+      {
+        env: envFor(mock, { NOTION_ALLOW_WRITE: '0' }),
+        fetchImpl: mock.fetchImpl,
+        sleep: async () => {},
+      },
+    );
+    expect(res.status).toBe(403);
+  });
+});

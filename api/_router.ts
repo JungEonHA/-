@@ -11,9 +11,12 @@ import {
   NotionClient,
   NotionError,
   addMissingProperties,
+  createGrant,
   fetchDatabaseSchema,
   fetchDayLog,
+  fetchGrants,
   normalizeId,
+  revokeGrant,
   suggestMapping,
   upsertDayRecord,
   type DatabaseSchema,
@@ -250,6 +253,80 @@ export async function handleApiRequest(req: ApiRequest, deps: RouterDeps): Promi
         employeeName: req.query['employee'] ?? null,
       });
       return json(200, result, cors);
+    }
+
+    // ---- 특별 휴가 부여 ----
+    if (path === '/notion/grants' && req.method === 'GET') {
+      const schema = await fetchDatabaseSchema(client, databaseId);
+      const { mapping: suggested } = suggestMapping(schema.properties);
+      const effective: FieldMapping = { ...suggested, ...parseMapping(req.query['mapping']) };
+
+      const result = await fetchGrants({
+        client,
+        databaseId,
+        schema,
+        mapping: effective,
+        employeeName: req.query['employee'] ?? null,
+      });
+      return json(200, result, cors);
+    }
+
+    if (path === '/notion/grants' && req.method === 'POST') {
+      if (env.NOTION_ALLOW_WRITE !== '1') {
+        return json(
+          403,
+          { error: '쓰기가 비활성화되어 있습니다.', code: 'write_disabled', retryable: false },
+          cors,
+        );
+      }
+
+      const dateKey = String(req.body?.dateKey ?? '');
+      const hours = Number(req.body?.hours);
+      const reason = String(req.body?.reason ?? '').trim();
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+        return json(400, { error: 'dateKey=YYYY-MM-DD 가 필요합니다.', code: 'bad_request', retryable: false }, cors);
+      }
+      if (!Number.isFinite(hours) || hours <= 0) {
+        return json(400, { error: '부여 시간은 0보다 커야 합니다.', code: 'bad_request', retryable: false }, cors);
+      }
+      // 사유 없는 부여는 나중에 아무도 근거를 확인할 수 없다. 이 기능의 존재 이유가
+      // "사유를 남기는 것" 이므로 여기서 막는다.
+      if (!reason) {
+        return json(400, { error: '부여 사유를 입력하세요.', code: 'bad_request', retryable: false }, cors);
+      }
+
+      const schema = await fetchDatabaseSchema(client, databaseId);
+      const { mapping: suggested } = suggestMapping(schema.properties);
+      const effective: FieldMapping = { ...suggested, ...(req.body?.mapping ?? {}) };
+
+      const result = await createGrant({
+        client,
+        databaseId,
+        schema,
+        mapping: effective,
+        employeeName: req.body?.employee ?? null,
+        dateKey,
+        hours,
+        reason,
+      });
+      return json(200, result, cors);
+    }
+
+    if (path === '/notion/grants/revoke' && req.method === 'POST') {
+      if (env.NOTION_ALLOW_WRITE !== '1') {
+        return json(
+          403,
+          { error: '쓰기가 비활성화되어 있습니다.', code: 'write_disabled', retryable: false },
+          cors,
+        );
+      }
+      const pageId = String(req.body?.id ?? '');
+      if (!pageId) {
+        return json(400, { error: 'id 가 필요합니다.', code: 'bad_request', retryable: false }, cors);
+      }
+      await revokeGrant({ client, pageId });
+      return json(200, { ok: true }, cors);
     }
 
     // ---- 누락 Property 추가 (명시적 요청일 때만) ----

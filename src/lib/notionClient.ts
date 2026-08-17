@@ -9,6 +9,7 @@
 import type { DatabaseSchemaLite, LogicalFieldKey } from './storage';
 import type { DayRecordPayload } from './record';
 import type { DayLog } from './events';
+import type { VacationGrant } from '../../shared/grants';
 
 export interface HealthInfo {
   ok: true;
@@ -192,6 +193,44 @@ export function getDay(
   const params = new URLSearchParams({ date: args.dateKey, mapping: JSON.stringify(args.mapping) });
   if (args.employeeName) params.set('employee', args.employeeName);
   return call<DayResponse>(config, 'GET', `/notion-day?${params.toString()}`);
+}
+
+/** 그 사람에게 부여된 특별 휴가 목록 (읽기 전용). */
+export function getGrants(
+  config: ClientConfig,
+  args: {
+    employeeName: string | null;
+    mapping: Partial<Record<LogicalFieldKey, string>>;
+  },
+): Promise<{ grants: VacationGrant[] }> {
+  const params = new URLSearchParams({ mapping: JSON.stringify(args.mapping) });
+  if (args.employeeName) params.set('employee', args.employeeName);
+  return call<{ grants: VacationGrant[] }>(config, 'GET', `/notion-grants?${params.toString()}`);
+}
+
+/** 특별 휴가를 부여한다 (Notion 에 새 행을 만든다). */
+export function addGrant(
+  config: ClientConfig,
+  args: {
+    employeeName: string | null;
+    dateKey: string;
+    hours: number;
+    reason: string;
+    mapping: Partial<Record<LogicalFieldKey, string>>;
+  },
+): Promise<{ grant: VacationGrant }> {
+  return call<{ grant: VacationGrant }>(config, 'POST', '/notion-grants', {
+    employee: args.employeeName,
+    dateKey: args.dateKey,
+    hours: args.hours,
+    reason: args.reason,
+    mapping: args.mapping,
+  });
+}
+
+/** 부여를 되돌린다 (Notion 휴지통). */
+export function revokeGrant(config: ClientConfig, id: string): Promise<{ ok: true }> {
+  return call<{ ok: true }>(config, 'POST', '/notion-grants/revoke', { id });
 }
 
 export function addProperties(

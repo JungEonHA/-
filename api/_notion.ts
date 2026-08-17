@@ -732,3 +732,197 @@ export async function addMissingProperties(args: {
   });
   return { added };
 }
+
+// ---------------------------------------------------------------------------
+// 특별 휴가 부여
+//
+// 부여는 근무 기록과 성격이 다른 행이다. `구분 = 특별부여` 로만 구별하며,
+// fetchDayLog 는 제목이 `… 근무기록` 인 행만 보므로 서로 간섭하지 않는다.
+//
+// 부여 전용 두 칸(부여시간·사유)은 이 기능이 직접 만들고 직접 읽는다. 나머지
+// (제목·날짜·직원·구분)는 사용자가 이미 확정한 매핑을 그대로 쓴다.
+
+import {
+  GRANT_KIND,
+  GRANT_HOURS_PROP,
+  GRANT_REASON_PROP,
+  grantTitle,
+  type VacationGrant,
+} from '../shared/grants.js';
+
+export { GRANT_KIND, type VacationGrant } from '../shared/grants.js';
+
+const HOUR_IN_MS = 3600000;
+
+/** 부여 전용 칸이 없으면 만든다. 있으면 아무것도 하지 않는다. */
+export async function ensureGrantProperties(args: {
+  client: NotionClient;
+  databaseId: string;
+  schema: DatabaseSchema;
+}): Promise<{ added: string[] }> {
+  const existing = new Set(args.schema.properties.map((p) => p.name));
+  const patch: Record<string, unknown> = {};
+  const added: string[] = [];
+
+  if (!existing.has(GRANT_HOURS_PROP)) {
+    patch[GRANT_HOURS_PROP] = { number: { format: 'number' } };
+    added.push(GRANT_HOURS_PROP);
+  }
+  if (!existing.has(GRANT_REASON_PROP)) {
+    patch[GRANT_REASON_PROP] = { rich_text: {} };
+    added.push(GRANT_REASON_PROP);
+  }
+  if (added.length === 0) return { added: [] };
+
+  await args.client.request('PATCH', `/databases/${normalizeId(args.databaseId)}`, {
+    properties: patch,
+  });
+  return { added };
+}
+
+/**
+ * 그 직원에게 부여된 특별 휴가를 전부 읽는다.
+ *
+ * 구분 Property 가 매핑돼 있지 않으면 부여 행을 구별할 방법이 없으므로 빈 목록을
+ * 돌려준다 — 추측해서 근무 기록을 부여로 오인하는 것보다 안전하다.
+ */
+export async function fetchGrants(args: {
+  client: NotionClient;
+  databaseId: string;
+  schema: DatabaseSchema;
+  mapping: FieldMapping;
+  employeeName: string | null;
+}): Promise<{ grants: VacationGrant[] }> {
+  const { client, schema, mapping } = args;
+  const databaseId = normalizeId(args.databaseId);
+  const employeeName = args.employeeName?.trim() || null;
+
+  const statusProp = mapping.status
+    ? schema.properties.find((p) => p.name === mapping.status)
+    : undefined;
+  const dateProp = mapping.date ? schema.properties.find((p) => p.name === mapping.date) : undefined;
+  const employeeProp =
+    mapping.employee && employeeName
+      ? schema.properties.find((p) => p.name === mapping.employee)
+      : undefined;
+
+  if (!statusProp) return { grants: [] };
+
+  const filters: unknown[] = [];
+  const kindFilter =
+    statusProp.type === 'select'
+      ? { property: statusProp.name, select: { equals: GRANT_KIND } }
+      : statusProp.type === 'status'
+        ? { property: statusProp.name, status: { equals: GRANT_KIND } }
+        : statusProp.type === 'rich_text'
+          ? { property: statusProp.name, rich_text: { equals: GRANT_KIND } }
+          : null;
+  if (!kindFilter) return { grants: [] };
+  filters.push(kindFilter);
+
+  if (employeeProp && employeeName) {
+    const f = buildEmployeeFilter(employeeProp, employeeName);
+    if (f) filters.push(f);
+  }
+
+  const grants: VacationGrant[] = [];
+  let cursor: string | undefined;
+  do {
+    const res = await client.request<any>('POST', `/databases/${databaseId}/query`, {
+      filter: filters.length === 1 ? filters[0] : { and: filters },
+      page_size: 100,
+      ...(cursor ? { start_cursor: cursor } : {}),
+    });
+
+    for (const page of res.results ?? []) {
+      if (!page || page.archived === true) continue;
+      const hours = page.properties?.[GRANT_HOURS_PROP]?.number;
+      if (typeof hours !== 'number' || !Number.isFinite(hours) || hours <= 0) continue;
+
+      const dateRaw = dateProp ? page.properties?.[dateProp.name]?.date?.start : null;
+      const reasonRaw = page.properties?.[GRANT_REASON_PROP];
+
+      grants.push({
+        id: String(page.id),
+        // 날짜 칸이 비어 있으면 만든 날을 기준으로 삼는다 — 부여가 통째로
+        // 사라지는 것보다 낫다.
+        dateKey: String(dateRaw ?? page.created_time ?? '').slice(0, 10),
+        ms: Math.round(hours * HOUR_IN_MS),
+        reason: reasonRaw ? plainTextFromRich(reasonRaw.rich_text) : '',
+      });
+    }
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+
+  grants.sort((a, b) => (a.dateKey < b.dateKey ? 1 : -1));
+  return { grants };
+}
+
+/** 부여 행을 새로 만든다. 기존 행은 절대 건드리지 않는다. */
+export async function createGrant(args: {
+  client: NotionClient;
+  databaseId: string;
+  schema: DatabaseSchema;
+  mapping: FieldMapping;
+  employeeName: string | null;
+  dateKey: string;
+  hours: number;
+  reason: string;
+}): Promise<{ grant: VacationGrant }> {
+  const { client, schema, mapping, dateKey, hours, reason } = args;
+  const databaseId = normalizeId(args.databaseId);
+  const employeeName = args.employeeName?.trim() || null;
+
+  await ensureGrantProperties({ client, databaseId, schema });
+
+  const properties: Record<string, unknown> = {
+    [GRANT_HOURS_PROP]: { number: hours },
+    [GRANT_REASON_PROP]: { rich_text: [{ text: { content: reason.slice(0, 1900) } }] },
+  };
+
+  const titleProp = schema.properties.find((p) => p.type === 'title');
+  if (titleProp) {
+    properties[titleProp.name] = { title: [{ text: { content: grantTitle(dateKey, employeeName) } }] };
+  }
+
+  const statusProp = mapping.status
+    ? schema.properties.find((p) => p.name === mapping.status)
+    : undefined;
+  if (statusProp?.type === 'select') properties[statusProp.name] = { select: { name: GRANT_KIND } };
+  else if (statusProp?.type === 'status') properties[statusProp.name] = { status: { name: GRANT_KIND } };
+
+  const dateProp = mapping.date ? schema.properties.find((p) => p.name === mapping.date) : undefined;
+  if (dateProp?.type === 'date') properties[dateProp.name] = { date: { start: dateKey } };
+
+  const employeeProp =
+    mapping.employee && employeeName
+      ? schema.properties.find((p) => p.name === mapping.employee)
+      : undefined;
+  if (employeeProp?.type === 'select' && employeeName) {
+    properties[employeeProp.name] = { select: { name: employeeName } };
+  } else if (employeeProp?.type === 'rich_text' && employeeName) {
+    properties[employeeProp.name] = { rich_text: [{ text: { content: employeeName } }] };
+  }
+
+  const page = await client.request<any>('POST', '/pages', {
+    parent: { database_id: databaseId },
+    properties,
+  });
+
+  return {
+    grant: {
+      id: String(page.id),
+      dateKey,
+      ms: Math.round(hours * HOUR_IN_MS),
+      reason,
+    },
+  };
+}
+
+/** 부여를 되돌린다 (노션 휴지통으로 보낸다 — 복구 가능). */
+export async function revokeGrant(args: {
+  client: NotionClient;
+  pageId: string;
+}): Promise<void> {
+  await args.client.request('PATCH', `/pages/${args.pageId}`, { archived: true });
+}
