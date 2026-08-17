@@ -184,7 +184,12 @@ function matchesFilter(page: MockPage, filter: any): boolean {
   if (Array.isArray(filter.or)) return filter.or.some((f: any) => matchesFilter(page, f));
 
   const raw = page.properties[filter.property];
+  // Property 자체가 없는 행은 어떤 조건에도 걸리지 않는다 (is_not_empty 포함).
   if (!raw) return false;
+  if (filter.number?.is_not_empty !== undefined) {
+    return filter.number.is_not_empty === (typeof raw.number === 'number');
+  }
+  if (filter.number?.equals !== undefined) return raw.number === filter.number.equals;
   if (filter.date?.equals !== undefined) return (raw.date?.start ?? null) === filter.date.equals;
   if (filter.rich_text?.equals !== undefined) return decode(raw) === filter.rich_text.equals;
   if (filter.title?.equals !== undefined) return decode(raw) === filter.title.equals;

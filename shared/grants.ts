@@ -14,12 +14,18 @@
  * `근무일` 은 "언제부터 쓸 수 있는가"를 정한다 — 그 달부터 잔량에 더해진다.
  */
 
-/** 부여 행을 알아보는 `구분` 값. 근무 기록 행과 섞이지 않게 하는 유일한 표식이다. */
+/** 노션 표에서 부여 행에 붙여 두는 `구분` 값 (사람이 보는 용도). */
 export const GRANT_KIND = '특별부여';
 
-/** 부여 전용 Notion Property 이름. 이 두 개는 앱이 직접 만들고 직접 읽는다. */
+/**
+ * 부여 전용 Notion Property 이름. 이 두 개는 앱이 직접 만들고 직접 읽는다.
+ * 특히 `부여시간` 은 **부여 행을 알아보는 유일한 기준**이다 (사용자 매핑을 타지 않는다).
+ */
 export const GRANT_HOURS_PROP = '부여시간';
 export const GRANT_REASON_PROP = '사유';
+
+/** 노션 표에서 사람이 알아보라고 적어 두는 보조 표시 칸. 읽을 때는 쓰지 않는다. */
+export const GRANT_KIND_PROP = '구분';
 
 export interface VacationGrant {
   /** Notion 페이지 id */

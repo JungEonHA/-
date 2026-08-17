@@ -799,6 +799,9 @@ describe('특별 휴가 부여 API', () => {
         근무일: { id: 'p2', type: 'date' },
         구분: { id: 'p3', type: 'select', options: ['근무', '휴가', '특별부여'] },
         직원: { id: 'p4', type: 'select', options: ['하정언', '박진규'] },
+        // 실제 DB 와 같은 함정: 앱이 쓰는 `근무상태` 가 따로 있어서 자동 매핑의
+        // `상태` 는 이쪽에 붙는다. 부여를 구분 값으로 찾으면 영영 못 찾는다.
+        근무상태: { id: 'p5', type: 'select', options: ['퇴근 완료', '근무 중'] },
       },
     });
   }
@@ -806,7 +809,7 @@ describe('특별 휴가 부여 API', () => {
   const mapping = JSON.stringify({
     title: '이름',
     date: '근무일',
-    status: '구분',
+    status: '근무상태',
     employee: '직원',
   });
 
@@ -835,6 +838,8 @@ describe('특별 휴가 부여 API', () => {
     const page = mock.pages.at(-1)!;
     expect(page.properties['부여시간']).toEqual({ number: 16 });
     expect(page.properties['구분']).toEqual({ select: { name: '특별부여' } });
+    // 앱이 근무 상태를 적는 칸은 건드리지 않는다
+    expect(page.properties['근무상태']).toBeUndefined();
     expect(page.properties['직원']).toEqual({ select: { name: '박진규' } });
     expect(page.properties['근무일']).toEqual({ date: { start: '2026-08-13' } });
   });
@@ -894,6 +899,32 @@ describe('특별 휴가 부여 API', () => {
     expect(body.grants[0]!.ms).toBe(16 * 3600000);
     expect(body.grants[0]!.reason).toBe('BIC 전시 참가');
     expect(body.grants[0]!.dateKey).toBe('2026-08-13');
+  });
+
+  it('상태 매핑이 부여와 무관한 칸을 가리켜도 읽어 온다 (실제 DB 구조)', async () => {
+    const mock = grantMock();
+    const deps = { env: envFor(mock), fetchImpl: mock.fetchImpl, sleep: async () => {} };
+
+    await handleApiRequest(
+      req({
+        method: 'POST',
+        path: '/notion/grants',
+        body: {
+          employee: '박진규',
+          dateKey: '2026-08-13',
+          hours: 16,
+          reason: 'BIC 전시 참가',
+          mapping: JSON.parse(mapping),
+        },
+      }),
+      deps,
+    );
+
+    const res = await handleApiRequest(
+      req({ method: 'GET', path: '/notion/grants', query: { employee: '박진규', mapping } }),
+      deps,
+    );
+    expect((res.body as { grants: unknown[] }).grants).toHaveLength(1);
   });
 
   it('근무 기록 행은 부여로 읽히지 않는다', async () => {

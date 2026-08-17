@@ -744,6 +744,7 @@ export async function addMissingProperties(args: {
 
 import {
   GRANT_KIND,
+  GRANT_KIND_PROP,
   GRANT_HOURS_PROP,
   GRANT_REASON_PROP,
   grantTitle,
@@ -783,8 +784,10 @@ export async function ensureGrantProperties(args: {
 /**
  * 그 직원에게 부여된 특별 휴가를 전부 읽는다.
  *
- * 구분 Property 가 매핑돼 있지 않으면 부여 행을 구별할 방법이 없으므로 빈 목록을
- * 돌려준다 — 추측해서 근무 기록을 부여로 오인하는 것보다 안전하다.
+ * 부여 행을 알아보는 기준은 **`부여시간` 칸에 값이 있는가** 하나다. 사용자 매핑에
+ * 기대지 않는 이유가 있다: 실제 DB 에는 `근무상태`(앱이 쓰는 칸)와 `구분`(사람이 쓰는 칸)이
+ * 둘 다 있어서 자동 매핑이 `상태`를 `근무상태` 에 붙인다. 그 상태로 구분 값을 찾으면
+ * 부여 행을 영영 못 찾는다. `부여시간` 은 이 기능만 쓰는 칸이라 오인할 여지가 없다.
  */
 export async function fetchGrants(args: {
   client: NotionClient;
@@ -797,28 +800,18 @@ export async function fetchGrants(args: {
   const databaseId = normalizeId(args.databaseId);
   const employeeName = args.employeeName?.trim() || null;
 
-  const statusProp = mapping.status
-    ? schema.properties.find((p) => p.name === mapping.status)
-    : undefined;
   const dateProp = mapping.date ? schema.properties.find((p) => p.name === mapping.date) : undefined;
   const employeeProp =
     mapping.employee && employeeName
       ? schema.properties.find((p) => p.name === mapping.employee)
       : undefined;
 
-  if (!statusProp) return { grants: [] };
+  // 부여 칸이 아직 없으면 부여된 적도 없다는 뜻이다.
+  if (!schema.properties.some((p) => p.name === GRANT_HOURS_PROP)) return { grants: [] };
 
-  const filters: unknown[] = [];
-  const kindFilter =
-    statusProp.type === 'select'
-      ? { property: statusProp.name, select: { equals: GRANT_KIND } }
-      : statusProp.type === 'status'
-        ? { property: statusProp.name, status: { equals: GRANT_KIND } }
-        : statusProp.type === 'rich_text'
-          ? { property: statusProp.name, rich_text: { equals: GRANT_KIND } }
-          : null;
-  if (!kindFilter) return { grants: [] };
-  filters.push(kindFilter);
+  const filters: unknown[] = [
+    { property: GRANT_HOURS_PROP, number: { is_not_empty: true } },
+  ];
 
   if (employeeProp && employeeName) {
     const f = buildEmployeeFilter(employeeProp, employeeName);
@@ -885,11 +878,11 @@ export async function createGrant(args: {
     properties[titleProp.name] = { title: [{ text: { content: grantTitle(dateKey, employeeName) } }] };
   }
 
-  const statusProp = mapping.status
-    ? schema.properties.find((p) => p.name === mapping.status)
-    : undefined;
-  if (statusProp?.type === 'select') properties[statusProp.name] = { select: { name: GRANT_KIND } };
-  else if (statusProp?.type === 'status') properties[statusProp.name] = { status: { name: GRANT_KIND } };
+  // 구분 값은 노션 표에서 사람이 알아보라고 적는 보조 표시다. 읽을 때는 쓰지 않으므로
+  // 칸이 없으면 그냥 넘어간다. 앱이 쓰는 `근무상태` 를 오염시키지 않도록 이름이 정확히
+  // `구분` 인 select 에만 적는다.
+  const kindProp = schema.properties.find((p) => p.name === GRANT_KIND_PROP);
+  if (kindProp?.type === 'select') properties[kindProp.name] = { select: { name: GRANT_KIND } };
 
   const dateProp = mapping.date ? schema.properties.find((p) => p.name === mapping.date) : undefined;
   if (dateProp?.type === 'date') properties[dateProp.name] = { date: { start: dateKey } };
