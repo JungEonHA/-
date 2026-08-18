@@ -112,10 +112,25 @@ function normalizeCorrection(raw: any): DayCorrection | null {
   if (!raw || typeof raw !== 'object') return null;
   const actualMs = typeof raw.actualMs === 'number' && Number.isFinite(raw.actualMs) ? Math.max(0, raw.actualMs) : null;
   if (actualMs === null) return null;
+  // 정정 근거 구간. 형태가 깨진 조각은 그것만 버린다 — 구간이 없어도 정정 자체는 유효하다.
+  const segments = Array.isArray(raw.segments)
+    ? raw.segments
+        .filter(
+          (seg: any) =>
+            seg &&
+            typeof seg.start === 'number' &&
+            typeof seg.end === 'number' &&
+            Number.isFinite(seg.start) &&
+            Number.isFinite(seg.end) &&
+            seg.end > seg.start,
+        )
+        .map((seg: any) => ({ start: seg.start, end: seg.end }))
+    : [];
   return {
     actualMs,
     beforeMs: typeof raw.beforeMs === 'number' && Number.isFinite(raw.beforeMs) ? Math.max(0, raw.beforeMs) : 0,
     reason: typeof raw.reason === 'string' ? raw.reason : '',
+    ...(segments.length > 0 ? { segments } : {}),
   };
 }
 

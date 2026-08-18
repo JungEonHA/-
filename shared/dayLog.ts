@@ -14,7 +14,13 @@
  *  - 휴가시간처럼 "덮어쓰는 값"만 updatedAt 이 큰 쪽을 택한다.
  */
 
-import type { DayCorrection, DayLog, WorkEvent, WorkEventType } from './events.js';
+import type {
+  CorrectedSegment,
+  DayCorrection,
+  DayLog,
+  WorkEvent,
+  WorkEventType,
+} from './events.js';
 import { dateKeyToEpoch } from './time.js';
 import { sameTodos } from './todos.js';
 
@@ -79,6 +85,12 @@ export function serializeDayLog(log: DayLog): string {
     head.push(`C:${Math.max(0, Math.floor(c.actualMs))}`);
     head.push(`CB:${Math.max(0, Math.floor(c.beforeMs))}`);
     if (c.reason) head.push(`CR:${encodeURIComponent(c.reason.slice(0, MAX_REASON_LENGTH))}`);
+    // 정정의 근거가 된 구간. "시작~끝" 을 쉼표로 잇고, 시각은 이벤트와 같은 상대 ms 다.
+    // 음수가 나올 수 있어 구분자로 `-` 대신 `~` 를 쓴다.
+    const segs = (c.segments ?? []).filter((seg) => seg.end > seg.start);
+    if (segs.length > 0) {
+      head.push(`CS:${segs.map((seg) => `${seg.start - base}~${seg.end - base}`).join(',')}`);
+    }
   }
 
   const tail = [...log.events]
@@ -109,6 +121,7 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
   let cBefore = 0;
   let cAt = 0;
   let cReason = '';
+  let cSegments: CorrectedSegment[] = [];
 
   for (const token of tokens.slice(1)) {
     const sep = token.indexOf(':');
@@ -124,6 +137,20 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
         // 깨진 인코딩은 사유만 버리고 정정 자체는 살린다.
         cReason = '';
       }
+      continue;
+    }
+    // 구간 목록도 숫자가 아니다. 깨진 조각은 그 조각만 버린다.
+    if (code === 'CS') {
+      cSegments = rawValue
+        .split(',')
+        .map((pair) => {
+          const [a, b] = pair.split('~');
+          const start = Number(a);
+          const end = Number(b);
+          if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+          return { start: base + start, end: base + end };
+        })
+        .filter((seg): seg is CorrectedSegment => seg !== null);
       continue;
     }
 
@@ -161,7 +188,14 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
 
   events.sort((a, b) => a.at - b.at);
   const correction: DayCorrection | null =
-    cActual === null ? null : { actualMs: cActual, beforeMs: cBefore, reason: cReason };
+    cActual === null
+      ? null
+      : {
+          actualMs: cActual,
+          beforeMs: cBefore,
+          reason: cReason,
+          ...(cSegments.length > 0 ? { segments: cSegments } : {}),
+        };
 
   return {
     date: dateKey,
@@ -240,8 +274,24 @@ export function sameDayLog(a: DayLog | null, b: DayLog | null): boolean {
   // 업무 리스트만 달라진 경우도 "바뀐 것"이다. 이걸 빼면 다른 기기에서 적은
   // 목록을 받아 놓고도 저장하지 않아 화면에 영영 안 나타난다.
   if (!sameTodos(a.todos, b.todos)) return false;
+  // 정정만 달라진 경우도 "바뀐 것"이다. 이걸 빼면 다른 기기에서 한 정정을 받아 놓고도
+  // 저장하지 않아 이 기기에서는 영영 반영되지 않는다 (취소도 마찬가지다).
+  if (!sameCorrection(a, b)) return false;
   return a.events.every((ev, i) => {
     const other = b.events[i];
     return !!other && other.type === ev.type && other.at === ev.at;
   });
+}
+
+/** 정정(및 정정 취소)이 같은 상태인지 */
+function sameCorrection(a: DayLog, b: DayLog): boolean {
+  if ((a.correctionAt ?? 0) !== (b.correctionAt ?? 0)) return false;
+  const x = a.correction;
+  const y = b.correction;
+  if (!x || !y) return !x && !y;
+  if (x.actualMs !== y.actualMs || x.beforeMs !== y.beforeMs || x.reason !== y.reason) return false;
+  const xs = x.segments ?? [];
+  const ys = y.segments ?? [];
+  if (xs.length !== ys.length) return false;
+  return xs.every((seg, i) => seg.start === ys[i]!.start && seg.end === ys[i]!.end);
 }

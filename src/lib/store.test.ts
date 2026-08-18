@@ -4,9 +4,9 @@ import { handleApiRequest, type ServerEnv } from '../../api/_router';
 import { AppStore } from './store';
 import { computeDay } from './events';
 import type { DayLog } from './events';
-import { mergeDayLogs, parseDayLog, serializeDayLog } from '../../shared/dayLog';
+import { mergeDayLogs, parseDayLog, sameDayLog, serializeDayLog } from '../../shared/dayLog';
 import { memoryStore } from './storage.test';
-import { HOUR_MS, dateKeyToEpoch } from './time';
+import { HOUR_MS, MINUTE_MS, dateKeyToEpoch } from './time';
 import { MAX_TODOS } from './todos';
 import type { KeyValueStore } from './storage';
 
@@ -1520,5 +1520,153 @@ describe('근무시간 정정 — 저장과 기기 간 병합', () => {
     };
 
     expect(mergeDayLogs(corrected, clockedOut)!.correction?.reason).toBe('정정');
+  });
+});
+
+describe('근무시간 정정 — 찍힌 구간에서 잘라내기', () => {
+  /** DAY 의 "HH:MM" epoch */
+  const hm = (h: number, m = 0) => t(h) + m * MINUTE_MS;
+
+  it('퇴근을 안 찍은 날은 실제 끝난 시각만 알려 주면 시간이 다시 계산된다', async () => {
+    const { store, setClockRaw } = await makeReadyStore(mock);
+
+    setClockRaw(hm(3, 5));
+    store.perform('clock_in'); // 새벽 3시 5분 출근, 퇴근은 안 찍음
+    setClockRaw(hm(10));
+    expect(computeDay(store.logFor(DAY), hm(10)).actualMs).toBe(6 * HOUR_MS + 55 * MINUTE_MS);
+
+    // 사람이 아는 것은 "5시에 끝났다"이지 "1시간 55분"이 아니다.
+    const ok = store.correctWorkTimeBySegments(
+      DAY,
+      [{ start: hm(3, 5), end: hm(5) }],
+      '퇴근 찍는 것을 잊음',
+      hm(10),
+    );
+    expect(ok).toBe(true);
+
+    const totals = computeDay(store.logFor(DAY), hm(12));
+    expect(totals.actualMs).toBe(115 * MINUTE_MS);
+    expect(totals.clockOutAt).toBe(hm(5));
+    expect(totals.correction?.beforeMs).toBe(6 * HOUR_MS + 55 * MINUTE_MS);
+    expect(totals.correction?.segments).toEqual([{ start: hm(3, 5), end: hm(5) }]);
+    expect(totals.isLive).toBe(false);
+  });
+
+  it('구간이 여러 개면 각각 잘라서 합산한다', async () => {
+    const { store, setClockRaw } = await makeReadyStore(mock);
+    setClockRaw(hm(3, 5));
+    store.perform('clock_in');
+    setClockRaw(hm(10));
+    store.perform('away_start');
+    setClockRaw(hm(14));
+    store.perform('away_end'); // 14:00 부터 다시 근무, 퇴근 안 찍음
+
+    const ok = store.correctWorkTimeBySegments(
+      DAY,
+      [
+        { start: hm(3, 5), end: hm(5) },
+        { start: hm(14), end: hm(18) },
+      ],
+      '퇴근 찍는 것을 잊음',
+      hm(23),
+    );
+    expect(ok).toBe(true);
+    expect(computeDay(store.logFor(DAY), hm(23)).actualMs).toBe(5 * HOUR_MS + 55 * MINUTE_MS);
+  });
+
+  it('찍힌 구간 밖으로는 늘릴 수 없다', async () => {
+    const { store, setClockRaw } = await makeReadyStore(mock);
+    setClockRaw(hm(9));
+    store.perform('clock_in');
+    setClockRaw(hm(12));
+    store.perform('clock_out');
+
+    const ok = store.correctWorkTimeBySegments(DAY, [{ start: hm(9), end: hm(18) }], '더 일했음', hm(20));
+    expect(ok).toBe(false);
+    expect(store.getSnapshot().runtime.notice?.kind).toBe('error');
+    expect(store.logFor(DAY).correction).toBeUndefined();
+  });
+
+  it('길이가 0 인 구간은 "그 시간엔 일하지 않았다"로 빠진다', async () => {
+    const { store, setClockRaw } = await makeReadyStore(mock);
+    setClockRaw(hm(9));
+    store.perform('clock_in');
+    setClockRaw(hm(12));
+    store.perform('away_start');
+    setClockRaw(hm(13));
+    store.perform('away_end');
+    setClockRaw(hm(18));
+    store.perform('clock_out');
+
+    store.correctWorkTimeBySegments(
+      DAY,
+      [
+        { start: hm(9), end: hm(12) },
+        { start: hm(13), end: hm(13) }, // 오후 구간은 통째로 제외
+      ],
+      '오후엔 자리만 지킴',
+      hm(20),
+    );
+    const totals = computeDay(store.logFor(DAY), hm(20));
+    expect(totals.actualMs).toBe(3 * HOUR_MS);
+    expect(totals.correction?.segments).toHaveLength(1);
+  });
+
+  it('사유가 없으면 정정하지 않는다', async () => {
+    const { store, setClockRaw } = await makeReadyStore(mock);
+    setClockRaw(hm(9));
+    store.perform('clock_in');
+    expect(store.correctWorkTimeBySegments(DAY, [{ start: hm(9), end: hm(10) }], '  ', hm(11))).toBe(false);
+    expect(store.logFor(DAY).correction).toBeUndefined();
+  });
+
+  it('아무것도 안 찍은 날은 구간 정정을 못 한다 (직접 입력으로 넘긴다)', async () => {
+    const { store } = await makeReadyStore(mock);
+    expect(store.correctWorkTimeBySegments(DAY, [{ start: t(9), end: t(18) }], '기록 없음', t(20))).toBe(false);
+    expect(store.getSnapshot().runtime.notice?.kind).toBe('error');
+  });
+
+  it('두 번 정정해도 "수정 전" 은 최초 원본을 유지한다', async () => {
+    const { store, setClockRaw } = await makeReadyStore(mock);
+    setClockRaw(hm(9));
+    store.perform('clock_in');
+    setClockRaw(hm(20));
+    store.perform('clock_out'); // 11시간으로 찍힘
+
+    store.correctWorkTimeBySegments(DAY, [{ start: hm(9), end: hm(18) }], '퇴근 지연 입력', hm(21));
+    store.correctWorkTimeBySegments(DAY, [{ start: hm(9), end: hm(17) }], '다시 확인', hm(22));
+
+    const c = store.logFor(DAY).correction!;
+    expect(c.beforeMs).toBe(11 * HOUR_MS);
+    expect(c.actualMs).toBe(8 * HOUR_MS);
+  });
+
+  it('정정 구간은 Notion 을 거쳐 다른 기기까지 그대로 간다', () => {
+    const log: DayLog = {
+      date: DAY,
+      events: [{ type: 'clock_in', at: hm(3, 5) }],
+      vacationMs: 0,
+      updatedAt: hm(10),
+      correctionAt: hm(10),
+      correction: {
+        actualMs: 115 * MINUTE_MS,
+        beforeMs: 7 * HOUR_MS,
+        reason: '퇴근 찍는 것을 잊음',
+        segments: [{ start: hm(3, 5), end: hm(5) }],
+      },
+    };
+    const back = parseDayLog(DAY, serializeDayLog(log))!;
+    expect(back.correction).toEqual(log.correction);
+  });
+
+  it('정정만 달라져도 "바뀐 기록"으로 본다 (안 그러면 다른 기기의 정정을 무시한다)', () => {
+    const base: DayLog = { date: DAY, events: [], vacationMs: 0, updatedAt: 1 };
+    const corrected: DayLog = {
+      ...base,
+      correctionAt: 100,
+      correction: { actualMs: 2 * HOUR_MS, beforeMs: 9 * HOUR_MS, reason: '정정' },
+    };
+    expect(sameDayLog(base, corrected)).toBe(false);
+    expect(sameDayLog(corrected, corrected)).toBe(true);
   });
 });

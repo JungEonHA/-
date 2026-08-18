@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyAction,
+  clockToEpochWithin,
   computeDay,
   emptyDayLog,
   isStaleSession,
   resolveActiveDate,
+  segmentsTotalMs,
+  workSegments,
   type ActionKind,
   type DayLog,
 } from './events';
@@ -386,5 +389,85 @@ describe('근무시간 정정', () => {
     expect(t.corrected).toBe(false);
     expect(t.correction).toBeNull();
     expect(t.correctedAt).toBeNull();
+  });
+});
+
+describe('찍혀 있는 근무 구간', () => {
+  it('자리비움으로 끊긴 근무는 두 구간으로 나뉜다', () => {
+    const log = run([
+      ['clock_in', '09:00'],
+      ['away_start', '12:00'],
+      ['away_end', '13:00'],
+      ['clock_out', '18:00'],
+    ]);
+    const segs = workSegments(log, at('20:00'));
+    expect(segs).toHaveLength(2);
+    expect(segs[0]).toMatchObject({ start: at('09:00'), end: at('12:00'), open: false });
+    expect(segs[1]).toMatchObject({ start: at('13:00'), end: at('18:00'), open: false });
+    expect(segmentsTotalMs(segs)).toBe(8 * HOUR_MS);
+  });
+
+  it('퇴근을 안 찍은 구간은 열린 채로 지금까지 이어진다', () => {
+    const log = run([['clock_in', '03:05']]);
+    const segs = workSegments(log, at('10:00'));
+    expect(segs).toHaveLength(1);
+    expect(segs[0]!.open).toBe(true);
+    expect(segs[0]!.end).toBe(at('10:00'));
+  });
+
+  it('구간 합계는 computeDay 의 실근무시간과 같다', () => {
+    const log = run([
+      ['clock_in', '09:00'],
+      ['away_start', '10:30'],
+      ['away_end', '11:00'],
+    ]);
+    const now = at('15:00');
+    expect(segmentsTotalMs(workSegments(log, now))).toBe(computeDay(log, now).actualMs);
+  });
+});
+
+describe('"HH:MM" 을 구간 안의 시각으로', () => {
+  const seg = { start: at('03:05'), end: at('10:00') };
+
+  it('구간 안에 들어오는 시각은 그대로 쓴다', () => {
+    expect(clockToEpochWithin('2026-08-10', '05:00', seg)).toBe(at('05:00'));
+  });
+
+  it('자정을 넘긴 근무는 다음날 시각으로 읽는다', () => {
+    const overnight = { start: at('22:00'), end: at('02:00', '2026-08-11') };
+    expect(clockToEpochWithin('2026-08-10', '01:00', overnight)).toBe(at('01:00', '2026-08-11'));
+  });
+
+  it('구간 밖의 시각은 가장 가까운 경계로 붙인다 — 기록에 없는 시간은 만들지 않는다', () => {
+    expect(clockToEpochWithin('2026-08-10', '02:00', seg)).toBe(seg.start);
+    // 12:00 은 같은 날 후보가 가장 가까우므로 끝(10:00)에 붙는다.
+    expect(clockToEpochWithin('2026-08-10', '12:00', seg)).toBe(seg.end);
+  });
+
+  it('시각 형식이 아니면 null', () => {
+    expect(clockToEpochWithin('2026-08-10', '', seg)).toBeNull();
+    expect(clockToEpochWithin('2026-08-10', '25:00', seg)).toBeNull();
+  });
+});
+
+describe('구간으로 정정한 날의 표시', () => {
+  it('출퇴근 시각도 정정한 구간을 따른다', () => {
+    const log = run([['clock_in', '03:05']]);
+    const corrected: DayLog = {
+      ...log,
+      correctionAt: at('11:00'),
+      correction: {
+        actualMs: 115 * MINUTE_MS,
+        beforeMs: 7 * HOUR_MS,
+        reason: '퇴근 못 찍음',
+        segments: [{ start: at('03:05'), end: at('05:00') }],
+      },
+    };
+    const totals = computeDay(corrected, at('12:00'));
+    expect(totals.actualMs).toBe(115 * MINUTE_MS);
+    expect(totals.clockInAt).toBe(at('03:05'));
+    expect(totals.clockOutAt).toBe(at('05:00'));
+    expect(totals.isLive).toBe(false);
+    expect(totals.status).toBe('finished');
   });
 });

@@ -14,7 +14,10 @@ import {
   computeDay,
   emptyDayLog,
   resolveActiveDate,
+  segmentsTotalMs,
+  workSegments,
   type ActionKind,
+  type CorrectedSegment,
   type DayLog,
 } from './events';
 import { buildRecord } from './record';
@@ -380,6 +383,77 @@ export class AppStore {
     }));
 
     this.notify('success', `${dateKey} 근무시간을 ${hours}시간으로 정정했습니다.`);
+    this.enqueue(dateKey, { auto: true });
+    return true;
+  }
+
+  /**
+   * 찍혀 있는 근무 구간을 잘라서 정정한다.
+   *
+   * 왜 이게 따로 있나 — "실제로 몇 시간 일했나"를 사람이 암산해서 넣게 하면 틀린다.
+   * 새벽 3시 5분에 출근해 5시에 끝났는데 퇴근을 안 찍었다면, 사람이 아는 것은
+   * "5시에 끝났다"는 사실이지 "1시간 55분"이라는 숫자가 아니다. 그래서 끝 시각을
+   * 받아 시간은 앱이 계산한다.
+   *
+   * 구간은 **찍혀 있는 범위 안에서만** 줄일 수 있다. 기록에 없는 시간을 늘리는 것은
+   * 정정이 아니라 창작이고, 그런 날은 기록 자체가 없으므로 직접 입력(correctWorkTime)
+   * 으로 처리한다.
+   */
+  correctWorkTimeBySegments(
+    dateKey: string,
+    segments: readonly CorrectedSegment[],
+    reason: string,
+    now = Date.now(),
+  ): boolean {
+    const text = reason.trim();
+    if (!text) {
+      this.notify('error', '정정 사유를 입력하세요.');
+      return false;
+    }
+
+    const log = this.snapshot.state.logs[dateKey];
+    const recorded = log ? workSegments(log, now) : [];
+    if (!log || recorded.length === 0) {
+      this.notify('error', '이 날짜에는 찍혀 있는 근무 구간이 없습니다. 시간을 직접 입력하세요.');
+      return false;
+    }
+
+    const kept: CorrectedSegment[] = [];
+    for (const seg of segments) {
+      if (!Number.isFinite(seg.start) || !Number.isFinite(seg.end)) {
+        this.notify('error', '정정할 시각을 올바르게 입력하세요.');
+        return false;
+      }
+      if (seg.end <= seg.start) continue; // 길이가 0 이면 "그 구간은 일하지 않았다"는 뜻
+      const inside = recorded.some((r) => seg.start >= r.start && seg.end <= r.end);
+      if (!inside) {
+        this.notify('error', '찍혀 있는 근무 구간 안에서만 정정할 수 있습니다.');
+        return false;
+      }
+      kept.push({ start: seg.start, end: seg.end });
+    }
+    kept.sort((a, b) => a.start - b.start);
+
+    const actualMs = segmentsTotalMs(kept);
+    const beforeMs = log.correction ? log.correction.beforeMs : computeDay(log, now).actualMs;
+
+    this.setState((s) => ({
+      ...s,
+      logs: {
+        ...s.logs,
+        [dateKey]: {
+          ...log,
+          updatedAt: now,
+          correctionAt: now,
+          correction: { actualMs, beforeMs, reason: text, segments: kept },
+        },
+      },
+    }));
+
+    this.notify(
+      'success',
+      `${dateKey} 근무시간을 ${Math.round((actualMs / 3600000) * 100) / 100}시간으로 정정했습니다.`,
+    );
     this.enqueue(dateKey, { auto: true });
     return true;
   }

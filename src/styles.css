@@ -939,6 +939,12 @@ button { font-family: inherit; }
 .muted { color: var(--text-muted); }
 .strong { font-weight: 800; }
 .right { text-align: right; }
+/* 근무시간 정정 — 한 구간의 "시작 ~ 종료" 입력.
+   .btnRow 를 재사용하면 가운데 물결표까지 1:1:1 로 늘어나 버린다. */
+.segEdit { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.segEdit .input { flex: 1; min-width: 0; }
+.segEdit__tilde { flex: none; color: var(--text-muted); }
+
 .mt8 { margin-top: 8px; }
 .mt12 { margin-top: 12px; }
 .mt16 { margin-top: 16px; }

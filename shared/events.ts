@@ -12,7 +12,7 @@
  *  - setInterval 은 오직 "화면을 다시 그리는" 용도이며 계산에 관여하지 않는다.
  */
 
-import { DAY_MS, toDateKey } from './time.js';
+import { DAY_MS, dateKeyToEpoch, toDateKey } from './time.js';
 import type { TodoItem } from './todos.js';
 
 export type WorkEventType = 'clock_in' | 'away_start' | 'away_end' | 'clock_out' | 'resume';
@@ -81,6 +81,36 @@ export interface DayCorrection {
   beforeMs: number;
   /** 정정 사유 */
   reason: string;
+  /**
+   * 정정의 근거가 된 실제 근무 구간.
+   *
+   * 시간을 사람이 암산해서 "8시간" 이라고 적는 대신 **찍혀 있는 구간을 잘라** 정정하면
+   * 채워진다 (예: 03:05~10:00 으로 찍혔지만 실제로는 05:00 에 끝났다 → 03:05~05:00).
+   * 숫자만 남기면 "왜 그 숫자인가"가 사라지므로 구간 자체를 같이 남긴다.
+   * 직접 시간을 적어 넣은 정정에는 없다.
+   */
+  segments?: CorrectedSegment[];
+}
+
+/** 정정으로 확정한 근무 구간 (epoch ms) */
+export interface CorrectedSegment {
+  start: number;
+  end: number;
+}
+
+/**
+ * 이벤트에서 잘라 낸 하루의 구간.
+ *
+ * computeDay 가 시간을 합산하는 단위이자, 화면에서 "언제부터 언제까지 찍혀 있나"를
+ * 보여 주고 그걸 고쳐 정정하게 하는 단위이기도 하다.
+ */
+export interface WorkSegment {
+  kind: 'work' | 'away';
+  start: number;
+  /** 아직 열려 있는 구간이면 `now` */
+  end: number;
+  /** 닫히지 않은(진행 중) 구간인지 */
+  open: boolean;
 }
 
 export type WorkStatus = 'not_started' | 'working' | 'away' | 'finished';
@@ -131,26 +161,42 @@ export function emptyDayLog(date: string): DayLog {
   return { date, events: [], vacationMs: 0 };
 }
 
+interface Walk {
+  segments: WorkSegment[];
+  clockInAt: number | null;
+  clockOutAt: number | null;
+  awayCount: number;
+  resumeCount: number;
+  pausedMs: number;
+  /** 마지막까지 닫히지 않은 구간이 있는지 */
+  openKind: 'work' | 'away' | null;
+}
+
 /**
- * 이벤트 목록으로부터 실제 근무시간/자리비움시간을 계산한다.
+ * 이벤트 목록을 시간 구간으로 펼친다. 근무시간 계산과 화면 표시가 같은 결과를 보게
+ * 하려고 한곳에서만 만든다 — 따로 계산하면 언젠가 반드시 어긋난다.
  *
- * `now` 는 항상 호출부에서 주입한다(테스트 가능성). 시계 역행(clock skew)이나
- * 잘못 저장된 미래 이벤트로 음수 구간이 생기지 않도록 마지막 이벤트 시각으로 clamp 한다.
+ * 시계 역행(clock skew)이나 잘못 저장된 미래 이벤트로 음수 구간이 생기지 않도록
+ * 구간의 끝은 시작보다 앞설 수 없게 clamp 한다.
  */
-export function computeDay(log: DayLog, now: number): DayTotals {
+export function walkDay(log: DayLog, now: number): Walk {
   const events = [...log.events].sort((a, b) => a.at - b.at);
 
-  let actualMs = 0;
-  let awayMs = 0;
+  const segments: WorkSegment[] = [];
+  let clockInAt: number | null = null;
+  let clockOutAt: number | null = null;
   let awayCount = 0;
   let resumeCount = 0;
   let pausedMs = 0;
-  let clockInAt: number | null = null;
-  let clockOutAt: number | null = null;
 
   // 현재 열려 있는 구간의 시작 시각과 종류
   let openKind: 'work' | 'away' | null = null;
   let openSince = 0;
+
+  const close = (at: number) => {
+    if (openKind === null) return;
+    segments.push({ kind: openKind, start: openSince, end: Math.max(at, openSince), open: false });
+  };
 
   for (const ev of events) {
     switch (ev.type) {
@@ -163,7 +209,7 @@ export function computeDay(log: DayLog, now: number): DayTotals {
       }
       case 'away_start': {
         if (openKind !== 'work') break; // 근무 중이 아닐 때는 무시
-        actualMs += Math.max(0, ev.at - openSince);
+        close(ev.at);
         openKind = 'away';
         openSince = ev.at;
         awayCount += 1;
@@ -171,15 +217,14 @@ export function computeDay(log: DayLog, now: number): DayTotals {
       }
       case 'away_end': {
         if (openKind !== 'away') break;
-        awayMs += Math.max(0, ev.at - openSince);
+        close(ev.at);
         openKind = 'work';
         openSince = ev.at;
         break;
       }
       case 'clock_out': {
         if (openKind === null || clockOutAt !== null) break;
-        if (openKind === 'work') actualMs += Math.max(0, ev.at - openSince);
-        else awayMs += Math.max(0, ev.at - openSince);
+        close(ev.at);
         clockOutAt = ev.at;
         openKind = null;
         break;
@@ -198,12 +243,53 @@ export function computeDay(log: DayLog, now: number): DayTotals {
     }
   }
 
-  // 아직 열려 있는 구간은 "지금"까지로 계산한다.
+  // 아직 열려 있는 구간은 "지금"까지로 본다.
   if (openKind !== null) {
-    const effectiveNow = Math.max(now, openSince);
-    if (openKind === 'work') actualMs += effectiveNow - openSince;
-    else awayMs += effectiveNow - openSince;
+    segments.push({
+      kind: openKind,
+      start: openSince,
+      end: Math.max(now, openSince),
+      open: true,
+    });
   }
+
+  return { segments, clockInAt, clockOutAt, awayCount, resumeCount, pausedMs, openKind };
+}
+
+/** 그날 찍혀 있는 구간들. 정정 여부와 무관하게 **원래 기록**을 돌려준다. */
+export function daySegments(log: DayLog, now: number): WorkSegment[] {
+  return walkDay(log, now).segments;
+}
+
+/** 그날 찍혀 있는 근무 구간만 (자리 비움 제외) */
+export function workSegments(log: DayLog, now: number): WorkSegment[] {
+  return walkDay(log, now).segments.filter((s) => s.kind === 'work');
+}
+
+/** 구간 길이의 합 (ms). 길이가 0 이하인 구간은 무시한다. */
+export function segmentsTotalMs(segments: readonly CorrectedSegment[]): number {
+  let total = 0;
+  for (const s of segments) total += Math.max(0, s.end - s.start);
+  return total;
+}
+
+/**
+ * 이벤트 목록으로부터 실제 근무시간/자리비움시간을 계산한다.
+ *
+ * `now` 는 항상 호출부에서 주입한다(테스트 가능성).
+ */
+export function computeDay(log: DayLog, now: number): DayTotals {
+  const walk = walkDay(log, now);
+
+  let actualMs = 0;
+  let awayMs = 0;
+  for (const seg of walk.segments) {
+    const len = Math.max(0, seg.end - seg.start);
+    if (seg.kind === 'work') actualMs += len;
+    else awayMs += len;
+  }
+
+  const { clockInAt, clockOutAt, awayCount, resumeCount, pausedMs, openKind } = walk;
 
   const status: WorkStatus =
     clockInAt === null ? 'not_started'
@@ -226,11 +312,19 @@ export function computeDay(log: DayLog, now: number): DayTotals {
   // 상태는 미출근인 모순된 행이 Notion 에 올라간다.
   const finalStatus: WorkStatus = corrected ? 'finished' : status;
 
+  // 구간을 잘라서 정정했다면 출퇴근 시각도 그 구간을 따른다 — 근무시간은 5시까지인데
+  // 표시는 10시 퇴근으로 남아 있으면 어느 쪽이 맞는지 알 수 없다.
+  const fixed = corrected
+    ? [...(correction.segments ?? [])].filter((s) => s.end > s.start).sort((a, b) => a.start - b.start)
+    : [];
+  const finalClockInAt = fixed.length > 0 ? fixed[0]!.start : clockInAt;
+  const finalClockOutAt = fixed.length > 0 ? fixed[fixed.length - 1]!.end : clockOutAt;
+
   return {
     date: log.date,
     status: finalStatus,
-    clockInAt,
-    clockOutAt,
+    clockInAt: finalClockInAt,
+    clockOutAt: finalClockOutAt,
     actualMs: finalActualMs,
     awayMs,
     vacationMs,
@@ -243,6 +337,43 @@ export function computeDay(log: DayLog, now: number): DayTotals {
     correction,
     correctedAt: corrected ? (log.correctionAt ?? null) : null,
   };
+}
+
+/**
+ * "HH:MM" 로 적은 시각을 그 구간 안의 절대시각으로 바꾼다.
+ *
+ * 자정을 넘겨 일한 날이 있으므로 날짜만으로는 시각이 정해지지 않는다 (22:00 출근 →
+ * 02:00 퇴근). 그래서 전날·당일·다음날 세 후보 중 **그 구간에 들어오는 것**을 고르고,
+ * 어느 것도 안 들어오면 가장 가까운 쪽으로 구간 안에 붙인다.
+ * 정정은 "찍힌 구간 안에서" 만 하기로 했으므로 구간을 벗어나는 값은 만들지 않는다.
+ */
+export function clockToEpochWithin(
+  dateKey: string,
+  hhmm: string,
+  segment: { start: number; end: number },
+): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if (!m) return null;
+  const hour = Number(m[1]);
+  const minute = Number(m[2]);
+  if (hour > 23 || minute > 59) return null;
+
+  const base = dateKeyToEpoch(dateKey) + hour * 60 * 60 * 1000 + minute * 60 * 1000;
+  const candidates = [base - DAY_MS, base, base + DAY_MS];
+
+  const inside = candidates.find((c) => c >= segment.start && c <= segment.end);
+  if (inside !== undefined) return inside;
+
+  let best = candidates[0]!;
+  let bestGap = Infinity;
+  for (const c of candidates) {
+    const gap = c < segment.start ? segment.start - c : c - segment.end;
+    if (gap < bestGap) {
+      best = c;
+      bestGap = gap;
+    }
+  }
+  return Math.min(segment.end, Math.max(segment.start, best));
 }
 
 /** 진행 중(미퇴근) 세션이 비정상적으로 길게 열려 있는지 */
