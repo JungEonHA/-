@@ -10,6 +10,7 @@ import {
   toDateKey,
   toMonthKey,
 } from '../lib/time';
+import { GRANTOR_NAME, canGrantVacation } from '../../shared/grants';
 import { Banner, Card, EmptyState, Tile } from './ui';
 
 const PRESET_HOURS = [1, 2, 4, 8] as const;
@@ -33,11 +34,25 @@ export function VacationPanel({ now }: { now: number }) {
   const [grantHours, setGrantHours] = useState<string>('8');
   const [grantReason, setGrantReason] = useState('');
   const [granting, setGranting] = useState(false);
+  // 기본값은 자기 자신이다. 남의 계정을 기본으로 두면 무심코 눌렀을 때 엉뚱한
+  // 사람에게 휴가가 꽂힌다 — 옮기는 것보다 되돌리는 쪽이 늘 번거롭다.
+  const [grantTarget, setGrantTarget] = useState(() => state.notion.employeeName.trim());
 
   const balance = computeBalance(state.logs, state.vacation, monthKey, state.grants);
   const monthGrants = state.grants.filter((g) => g.dateKey.slice(0, 7) === monthKey);
   const history = vacationHistory(state.logs);
   const dayUsed = state.logs[dateKey]?.vacationMs ?? 0;
+
+  // 부여는 대표만 한다 (상급자 결재). 나머지 사람에게는 폼 자체를 감춘다.
+  const isGrantor = canGrantVacation(state.notion.employeeName);
+  // 대상 후보는 노션 `직원` select 의 선택지를 그대로 쓴다 — 사람이 늘어도 코드를
+  // 고칠 필요가 없다. 스키마를 아직 못 읽었으면 최소한 본인은 고를 수 있게 둔다.
+  const employeeProp = state.notion.mapping.employee;
+  const employeeOptions =
+    state.notion.schema?.properties.find((p) => p.name === employeeProp)?.options ?? [];
+  const targetChoices = employeeOptions.length
+    ? employeeOptions
+    : [state.notion.employeeName.trim()].filter(Boolean);
 
   return (
     <div className="stack">
@@ -178,6 +193,35 @@ export function VacationPanel({ now }: { now: number }) {
           </button>
         }
       >
+        {!isGrantor && (
+          <Banner kind="info">
+            특별 휴가 부여는 {GRANTOR_NAME} 만 할 수 있습니다. 필요하면 {GRANTOR_NAME} 에게
+            요청하세요. 아래 목록에서 내게 부여된 내역은 그대로 볼 수 있습니다.
+          </Banner>
+        )}
+
+        {isGrantor && (
+        <>
+        <div className="field">
+          <label className="field__label" htmlFor="grant-target">
+            부여 대상
+          </label>
+          <select
+            id="grant-target"
+            className="input"
+            value={grantTarget}
+            data-testid="grant-target"
+            onChange={(e) => setGrantTarget(e.target.value)}
+          >
+            {targetChoices.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+          <span className="field__hint">이 사람의 잔여 휴가에 더해집니다.</span>
+        </div>
+
         <div className="field">
           <label className="field__label" htmlFor="grant-date">
             기준일
@@ -241,7 +285,7 @@ export function VacationPanel({ now }: { now: number }) {
             type="button"
             className="btn btn--primary"
             data-testid="btn-grant-add"
-            disabled={granting || !grantReason.trim() || !(Number(grantHours) > 0)}
+            disabled={granting || !grantTarget || !grantReason.trim() || !(Number(grantHours) > 0)}
             onClick={() => {
               setGranting(true);
               void store
@@ -249,6 +293,7 @@ export function VacationPanel({ now }: { now: number }) {
                   dateKey: grantDate,
                   hours: Number(grantHours),
                   reason: grantReason.trim(),
+                  targetEmployee: grantTarget,
                 })
                 .then((ok) => {
                   if (ok) setGrantReason('');
@@ -261,9 +306,12 @@ export function VacationPanel({ now }: { now: number }) {
         </div>
 
         <p className="field__hint mt12">
-          사유는 반드시 남겨야 합니다. 부여 내역은 Notion 에 행으로 저장되어 두 사람의 기기에서
-          모두 같은 잔여 휴가가 보입니다.
+          사유는 반드시 남겨야 합니다. 부여 내역은 Notion 에 행으로 저장됩니다. 아래 목록과
+          잔여 휴가는 <b>내게 부여된 것</b>만 세므로, 다른 사람에게 준 내역은 그 사람 화면과
+          Notion 표에서 확인하세요.
         </p>
+        </>
+        )}
 
         <div className="mt12">
           {monthGrants.length === 0 ? (
@@ -277,6 +325,7 @@ export function VacationPanel({ now }: { now: number }) {
                     <div className="listRow__sub">{formatDateKeyKo(g.dateKey)}</div>
                   </div>
                   <div className="listRow__value">{formatDurationKo(g.ms)}</div>
+                  {isGrantor && (
                   <button
                     type="button"
                     className="btn btn--ghost btn--sm"
@@ -284,6 +333,7 @@ export function VacationPanel({ now }: { now: number }) {
                   >
                     부여 취소
                   </button>
+                  )}
                 </div>
               ))}
             </div>

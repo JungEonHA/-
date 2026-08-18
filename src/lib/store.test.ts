@@ -406,6 +406,107 @@ describe('휴가 연동', () => {
   });
 });
 
+describe('특별 휴가 부여 권한 (상급자 결재)', () => {
+  /** 직원 Property 와 부여 칸이 있는 DB */
+  function makeGrantMock() {
+    return new NotionMock({
+      databaseId: DB_ID,
+      title: '근무 기록',
+      properties: {
+        '기록명': { id: 'p1', type: 'title' },
+        '근무 일자': { id: 'p2', type: 'date' },
+        '실 근무시간': { id: 'p3', type: 'number' },
+        '직원': { id: 'p4', type: 'select', options: ['하정언', '박진규'] },
+        '부여시간': { id: 'p5', type: 'number' },
+        '사유': { id: 'p6', type: 'rich_text' },
+        '구분': { id: 'p7', type: 'select', options: ['특별부여'] },
+      },
+    });
+  }
+
+  it('대표가 아니면 부여할 수 없다', async () => {
+    const team = makeGrantMock();
+    installBackend(team);
+    const { store } = await makeReadyStore(team);
+    store.setEmployeeName('박진규');
+
+    const ok = await store.grantVacation({ dateKey: DAY, hours: 8, reason: '특별 휴가' });
+
+    expect(ok).toBe(false);
+    expect(team.pages).toHaveLength(0);
+  });
+
+  it('대표는 다른 사람에게 부여할 수 있고, 그 사람 이름으로 기록된다', async () => {
+    const team = makeGrantMock();
+    installBackend(team);
+    const { store } = await makeReadyStore(team);
+    store.setEmployeeName('하정언');
+
+    const ok = await store.grantVacation({
+      dateKey: DAY,
+      hours: 3,
+      reason: '특별 휴가',
+      targetEmployee: '박진규',
+    });
+
+    expect(ok).toBe(true);
+    expect(team.pages).toHaveLength(1);
+    const row = team.read(team.pages[0]!.id);
+    // 부여를 누른 사람이 아니라 **받는 사람**으로 들어가야 한다.
+    expect(row['직원']).toBe('박진규');
+    expect(row['부여시간']).toBe(3);
+  });
+
+  it('대상을 지정하지 않으면 부여자 본인에게 들어간다', async () => {
+    const team = makeGrantMock();
+    installBackend(team);
+    const { store } = await makeReadyStore(team);
+    store.setEmployeeName('하정언');
+
+    await store.grantVacation({ dateKey: DAY, hours: 2, reason: '포상' });
+
+    expect(team.read(team.pages[0]!.id)['직원']).toBe('하정언');
+  });
+
+  it('남에게 준 부여는 부여자의 잔여 휴가에 섞이지 않는다', async () => {
+    const team = makeGrantMock();
+    installBackend(team);
+    const { store } = await makeReadyStore(team);
+    store.setEmployeeName('하정언');
+
+    await store.grantVacation({
+      dateKey: DAY,
+      hours: 6,
+      reason: '특별 휴가',
+      targetEmployee: '박진규',
+    });
+
+    // 노션에는 들어갔지만
+    expect(team.pages).toHaveLength(1);
+    expect(team.read(team.pages[0]!.id)['직원']).toBe('박진규');
+    // 부여자 본인의 목록(=잔여 계산의 근거)에는 잡히지 않는다.
+    // 여기가 섞이면 대표가 남에게 줄 때마다 자기 잔여가 늘어난다.
+    expect(store.getSnapshot().state.grants).toHaveLength(0);
+  });
+
+  it('대표가 아니면 부여를 취소할 수도 없다', async () => {
+    const team = makeGrantMock();
+    installBackend(team);
+    const { store } = await makeReadyStore(team);
+    store.setEmployeeName('하정언');
+    await store.grantVacation({ dateKey: DAY, hours: 3, reason: '특별 휴가' });
+    const granted = store.getSnapshot().state.grants;
+    expect(granted).toHaveLength(1);
+
+    store.setEmployeeName('박진규');
+    const ok = await store.revokeVacationGrant(granted[0]!.id);
+
+    expect(ok).toBe(false);
+    // 노션 행이 그대로 남아 있어야 한다 (휴지통으로 가지 않았다)
+    expect(team.pages).toHaveLength(1);
+  });
+});
+
 describe('새로고침 / 재시작 복구', () => {
   it('새 인스턴스가 진행 중인 근무 상태와 경과시간을 복원한다', async () => {
     const kv = memoryStore();

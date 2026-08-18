@@ -27,6 +27,23 @@ export const GRANT_REASON_PROP = '사유';
 /** 노션 표에서 사람이 알아보라고 적어 두는 보조 표시 칸. 읽을 때는 쓰지 않는다. */
 export const GRANT_KIND_PROP = '구분';
 
+/**
+ * 특별 휴가를 부여할 수 있는 사람 (2026-08-18 CEO 지시).
+ *
+ * 부여는 원래 "부여를 누른 기기의 이름"으로 들어갔다. 그래서 각자 자기 자신에게
+ * 얼마든지 얹을 수 있었다. 부여 권한은 대표에게만 있어야 하므로 이름으로 가른다.
+ *
+ * 한계를 분명히 해 둔다 — 이건 **화면 단의 가드**다. 서버는 요청자가 누구인지 알 수
+ * 없고(두 사람이 같은 `APP_ACCESS_KEY` 를 쓴다) 이름은 앱 설정에서 바꿀 수 있는 값이다.
+ * 실수로 자기에게 부여하는 것을 막는 용도이지, 작정하고 우회하는 것은 못 막는다.
+ * 진짜로 막아야 한다면 사람별 접근 키를 따로 두는 수밖에 없다.
+ */
+export const GRANTOR_NAME = '하정언';
+
+export function canGrantVacation(employeeName: string | null | undefined): boolean {
+  return (employeeName ?? '').trim() === GRANTOR_NAME;
+}
+
 export interface VacationGrant {
   /** Notion 페이지 id */
   id: string;

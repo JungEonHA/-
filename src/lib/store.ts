@@ -54,6 +54,7 @@ import { toDateKey } from './time';
 import { MAX_TODOS, MAX_TODO_TEXT, makeTodoId, type TodoItem } from './todos';
 import { planVacationChange, type VacationConfig } from './vacation';
 import { suggestMapping } from '../../shared/fields';
+import { GRANTOR_NAME, canGrantVacation } from '../../shared/grants';
 
 export type BackendStatus = 'checking' | 'ready' | 'unavailable' | 'error';
 
@@ -363,8 +364,23 @@ export class AppStore {
     }
   }
 
-  /** 사유를 달아 특별 휴가를 부여한다. 성공하면 목록을 다시 읽는다. */
-  async grantVacation(args: { dateKey: string; hours: number; reason: string }): Promise<boolean> {
+  /**
+   * 사유를 달아 특별 휴가를 부여한다. 성공하면 목록을 다시 읽는다.
+   *
+   * `targetEmployee` 는 **받는 사람**이다. 예전에는 이 값이 없어서 "부여를 누른 기기의
+   * 이름"으로 들어갔고, 그래서 대표가 박진규에게 주려면 박진규 기기에서 눌러야 했다.
+   * 부여 권한을 대표로 좁히는 이상(`canGrantVacation`) 대상을 고를 수 있어야 한다.
+   */
+  async grantVacation(args: {
+    dateKey: string;
+    hours: number;
+    reason: string;
+    targetEmployee?: string | null;
+  }): Promise<boolean> {
+    if (!canGrantVacation(this.snapshot.state.notion.employeeName)) {
+      this.notify('error', `특별 휴가 부여는 ${GRANTOR_NAME} 만 할 수 있습니다.`);
+      return false;
+    }
     const reason = args.reason.trim();
     if (!reason) {
       this.notify('error', '부여 사유를 입력하세요.');
@@ -385,15 +401,19 @@ export class AppStore {
 
     try {
       const { employeeName, mapping } = this.snapshot.state.notion;
+      const target = (args.targetEmployee ?? employeeName).trim() || null;
       await apiAddGrant(this.clientConfig(), {
-        employeeName: employeeName.trim() || null,
+        employeeName: target,
         dateKey: args.dateKey,
         hours: args.hours,
         reason,
         mapping,
       });
       await this.pullGrants();
-      this.notify('success', `${args.dateKey} 특별 휴가 ${args.hours}시간을 부여했습니다.`);
+      this.notify(
+        'success',
+        `${args.dateKey} ${target ?? ''} 특별 휴가 ${args.hours}시간을 부여했습니다.`.replace('  ', ' '),
+      );
       return true;
     } catch (err) {
       this.notify('error', `부여하지 못했습니다: ${(err as Error).message}`);
@@ -401,8 +421,12 @@ export class AppStore {
     }
   }
 
-  /** 부여를 되돌린다 (Notion 휴지통으로 이동 — 복구 가능). */
+  /** 부여를 되돌린다 (Notion 휴지통으로 이동 — 복구 가능). 부여와 같은 권한을 요구한다. */
   async revokeVacationGrant(id: string): Promise<boolean> {
+    if (!canGrantVacation(this.snapshot.state.notion.employeeName)) {
+      this.notify('error', `부여 취소는 ${GRANTOR_NAME} 만 할 수 있습니다.`);
+      return false;
+    }
     try {
       await apiRevokeGrant(this.clientConfig(), id);
       this.setState((s) => ({ ...s, grants: s.grants.filter((g) => g.id !== id) }));
