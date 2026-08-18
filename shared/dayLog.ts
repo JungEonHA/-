@@ -14,7 +14,7 @@
  *  - 휴가시간처럼 "덮어쓰는 값"만 updatedAt 이 큰 쪽을 택한다.
  */
 
-import type { DayLog, WorkEvent, WorkEventType } from './events.js';
+import type { DayCorrection, DayLog, WorkEvent, WorkEventType } from './events.js';
 import { dateKeyToEpoch } from './time.js';
 import { sameTodos } from './todos.js';
 
@@ -45,6 +45,13 @@ const TYPE_BY_CODE: Record<string, WorkEventType> = {
 const MAX_TEXT_LENGTH = 1900;
 
 /**
+ * 정정 사유의 최대 길이(문자).
+ * 한글은 percent-encoding 하면 한 글자가 9자로 불어나므로 짧게 끊는다 —
+ * 50자면 인코딩 후에도 450자 안쪽이라 위 상한을 위협하지 않는다.
+ */
+const MAX_REASON_LENGTH = 50;
+
+/**
  * "v1 U:<epochMs> V:<휴가ms> T:<epochMs> i:<상대ms> as:<상대ms> …"
  *
  * 시각을 그날 자정(KST) 기준 상대값으로 적는 이유는 길이를 줄이기 위해서다.
@@ -62,6 +69,17 @@ export function serializeDayLog(log: DayLog): string {
     `V:${Math.max(0, Math.floor(log.vacationMs || 0))}`,
   ];
   if (log.todosAt) head.push(`T:${Math.max(0, Math.floor(log.todosAt))}`);
+
+  // 정정. 사유에는 공백이 들어가므로 percent-encoding 해서 토큰 하나로 만든다
+  // (형식이 공백 구분이라 날것으로 넣으면 파서가 토큰 경계를 잘못 잡는다).
+  // CT 는 정정을 취소했을 때도 남긴다 — 그래야 다른 기기의 옛 정정을 이긴다.
+  if (log.correctionAt) head.push(`CT:${Math.max(0, Math.floor(log.correctionAt))}`);
+  if (log.correction) {
+    const c = log.correction;
+    head.push(`C:${Math.max(0, Math.floor(c.actualMs))}`);
+    head.push(`CB:${Math.max(0, Math.floor(c.beforeMs))}`);
+    if (c.reason) head.push(`CR:${encodeURIComponent(c.reason.slice(0, MAX_REASON_LENGTH))}`);
+  }
 
   const tail = [...log.events]
     .sort((a, b) => a.at - b.at)
@@ -87,12 +105,29 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
   let updatedAt = 0;
   let vacationMs = 0;
   let todosAt = 0;
+  let cActual: number | null = null;
+  let cBefore = 0;
+  let cAt = 0;
+  let cReason = '';
 
   for (const token of tokens.slice(1)) {
     const sep = token.indexOf(':');
     if (sep < 0) continue;
     const code = token.slice(0, sep);
-    const value = Number(token.slice(sep + 1));
+    const rawValue = token.slice(sep + 1);
+
+    // 사유는 숫자가 아니므로 숫자 검사보다 먼저 처리한다.
+    if (code === 'CR') {
+      try {
+        cReason = decodeURIComponent(rawValue).slice(0, MAX_REASON_LENGTH);
+      } catch {
+        // 깨진 인코딩은 사유만 버리고 정정 자체는 살린다.
+        cReason = '';
+      }
+      continue;
+    }
+
+    const value = Number(rawValue);
     if (!Number.isFinite(value)) continue;
 
     if (code === 'U') {
@@ -107,13 +142,36 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
       todosAt = Math.max(0, value);
       continue;
     }
+    if (code === 'C') {
+      cActual = Math.max(0, value);
+      continue;
+    }
+    if (code === 'CB') {
+      cBefore = Math.max(0, value);
+      continue;
+    }
+    if (code === 'CT') {
+      cAt = Math.max(0, value);
+      continue;
+    }
     const type = TYPE_BY_CODE[code];
     if (!type) continue;
     events.push({ type, at: base + value });
   }
 
   events.sort((a, b) => a.at - b.at);
-  return { date: dateKey, events, vacationMs, updatedAt, ...(todosAt ? { todosAt } : {}) };
+  const correction: DayCorrection | null =
+    cActual === null ? null : { actualMs: cActual, beforeMs: cBefore, reason: cReason };
+
+  return {
+    date: dateKey,
+    events,
+    vacationMs,
+    updatedAt,
+    ...(todosAt ? { todosAt } : {}),
+    ...(cAt ? { correctionAt: cAt } : {}),
+    ...(correction ? { correction } : {}),
+  };
 }
 
 /**
@@ -152,6 +210,15 @@ export function mergeDayLogs(a: DayLog | null, b: DayLog | null): DayLog | null 
   const todos = todoWinner.todos ?? (todoWinner === a ? b.todos : a.todos);
   const todosAt = Math.max(aTodosAt, bTodosAt);
 
+  // 정정도 업무 리스트와 같은 이유로 **자기 시각**으로 승자를 가린다.
+  // updatedAt 을 쓰면 데스크탑에서 정정해 둔 값이, 노트북에서 출퇴근만 눌러도 사라진다.
+  // 이긴 쪽이 정정을 지웠다면(correction 없음) 지운 상태가 그대로 이겨야 한다.
+  const aCorrAt = a.correctionAt ?? 0;
+  const bCorrAt = b.correctionAt ?? 0;
+  const corrWinner = bCorrAt > aCorrAt ? b : bCorrAt < aCorrAt ? a : newer;
+  const correction = corrWinner.correction;
+  const correctionAt = Math.max(aCorrAt, bCorrAt);
+
   return {
     date: a.date,
     events,
@@ -160,6 +227,8 @@ export function mergeDayLogs(a: DayLog | null, b: DayLog | null): DayLog | null 
     ...(newer.memo ? { memo: newer.memo } : {}),
     ...(todos ? { todos } : {}),
     ...(todosAt ? { todosAt } : {}),
+    ...(correctionAt ? { correctionAt } : {}),
+    ...(correction ? { correction } : {}),
   };
 }
 

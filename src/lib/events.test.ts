@@ -325,3 +325,66 @@ describe('활성 근무일 / 장시간 세션', () => {
     expect(isStaleSession(computeDay(log, late), late)).toBe(true);
   });
 });
+
+describe('근무시간 정정', () => {
+  const KST_MIDNIGHT = Date.UTC(2026, 7, 18) - 9 * 3600000;
+  const at = (h: number) => KST_MIDNIGHT + h * 3600000;
+
+  it('퇴근을 안 찍으면 지금까지가 근무시간으로 계속 늘어난다', () => {
+    const log: DayLog = { date: '2026-08-18', events: [{ type: 'clock_in', at: at(9) }], vacationMs: 0 };
+    expect(computeDay(log, at(20)).actualMs).toBe(11 * 3600000);
+    expect(computeDay(log, at(23)).actualMs).toBe(14 * 3600000);
+    expect(computeDay(log, at(23)).isLive).toBe(true);
+  });
+
+  it('정정하면 그 값으로 고정되고 더 이상 흐르지 않는다', () => {
+    const log: DayLog = {
+      date: '2026-08-18',
+      events: [{ type: 'clock_in', at: at(9) }],
+      vacationMs: 0,
+      correctionAt: at(23),
+      correction: { actualMs: 8 * 3600000, beforeMs: 14 * 3600000, reason: '퇴근 찍는 것을 잊음' },
+    };
+
+    const t20 = computeDay(log, at(20));
+    const t23 = computeDay(log, at(23));
+    expect(t20.actualMs).toBe(8 * 3600000);
+    expect(t23.actualMs).toBe(8 * 3600000); // 시간이 지나도 그대로
+    expect(t23.isLive).toBe(false);
+    expect(t23.status).toBe('finished');
+  });
+
+  it('정정 전 값과 사유가 그대로 남는다', () => {
+    const log: DayLog = {
+      date: '2026-08-18',
+      events: [{ type: 'clock_in', at: at(9) }],
+      vacationMs: 0,
+      correctionAt: at(23),
+      correction: { actualMs: 8 * 3600000, beforeMs: 14 * 3600000, reason: '퇴근 찍는 것을 잊음' },
+    };
+    const t = computeDay(log, at(23));
+    expect(t.corrected).toBe(true);
+    expect(t.correction?.beforeMs).toBe(14 * 3600000);
+    expect(t.correction?.reason).toBe('퇴근 찍는 것을 잊음');
+    expect(t.correctedAt).toBe(at(23));
+  });
+
+  it('휴가는 정정된 근무시간 위에 그대로 더해진다', () => {
+    const log: DayLog = {
+      date: '2026-08-18',
+      events: [],
+      vacationMs: 2 * 3600000,
+      correctionAt: at(23),
+      correction: { actualMs: 5 * 3600000, beforeMs: 0, reason: '기록 누락' },
+    };
+    expect(computeDay(log, at(23)).creditedMs).toBe(7 * 3600000);
+  });
+
+  it('정정이 없으면 corrected 는 false 다', () => {
+    const log: DayLog = { date: '2026-08-18', events: [], vacationMs: 0 };
+    const t = computeDay(log, at(12));
+    expect(t.corrected).toBe(false);
+    expect(t.correction).toBeNull();
+    expect(t.correctedAt).toBeNull();
+  });
+});

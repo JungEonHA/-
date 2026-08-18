@@ -334,6 +334,73 @@ export class AppStore {
     return true;
   }
 
+  // -- 근무시간 정정 -----------------------------------------------------
+  //
+  // 퇴근을 안 찍고 가면 세션이 열린 채 남아 시간이 계속 늘거나 엉뚱하게 굳는다.
+  // 이벤트는 append-only 라 잘못된 시각을 지울 수 없으므로, 사람이 판단한 값을
+  // 덮어쓰는 값으로 얹고 **원래 값과 사유를 함께 남긴다**.
+
+  /**
+   * 그날 실근무시간을 정정한다.
+   * @param hours 정정 후 실근무시간 (시간 단위)
+   */
+  correctWorkTime(dateKey: string, hours: number, reason: string, now = Date.now()): boolean {
+    if (!Number.isFinite(hours) || hours < 0) {
+      this.notify('error', '정정할 근무시간을 올바르게 입력하세요.');
+      return false;
+    }
+    if (hours > 24) {
+      this.notify('error', '하루 근무시간은 24시간을 넘을 수 없습니다.');
+      return false;
+    }
+    const text = reason.trim();
+    if (!text) {
+      this.notify('error', '정정 사유를 입력하세요.');
+      return false;
+    }
+
+    const log = this.logFor(dateKey);
+    const actualMs = Math.round(hours * 3600000);
+
+    // 정정 전 값은 "지금 화면에 보이던 그 값"이어야 한다. 이미 한 번 정정한 날을
+    // 다시 고칠 때는 최초 원본을 유지한다 — 그래야 "원래 얼마였나"가 보존된다.
+    const beforeMs = log.correction ? log.correction.beforeMs : computeDay(log, now).actualMs;
+
+    this.setState((s) => ({
+      ...s,
+      logs: {
+        ...s.logs,
+        [dateKey]: {
+          ...log,
+          updatedAt: now,
+          correctionAt: now,
+          correction: { actualMs, beforeMs, reason: text },
+        },
+      },
+    }));
+
+    this.notify('success', `${dateKey} 근무시간을 ${hours}시간으로 정정했습니다.`);
+    this.enqueue(dateKey, { auto: true });
+    return true;
+  }
+
+  /** 정정을 취소하고 원래 이벤트 기준 계산으로 되돌린다. */
+  clearCorrection(dateKey: string, now = Date.now()): boolean {
+    const log = this.snapshot.state.logs[dateKey];
+    if (!log?.correction) return false;
+
+    this.setState((s) => {
+      // correctionAt 은 남긴다 — "이 시각에 취소했다"가 있어야 다른 기기의 옛 정정을 이긴다.
+      const next = { ...log, updatedAt: now, correctionAt: now };
+      delete next.correction;
+      return { ...s, logs: { ...s.logs, [dateKey]: next } };
+    });
+
+    this.notify('success', `${dateKey} 정정을 취소하고 원래 기록으로 되돌렸습니다.`);
+    this.enqueue(dateKey, { auto: true });
+    return true;
+  }
+
   updateVacationConfig(patch: Partial<VacationConfig>) {
     this.setState((s) => ({ ...s, vacation: { ...s.vacation, ...patch } }));
   }

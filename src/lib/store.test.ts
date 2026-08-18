@@ -3,6 +3,8 @@ import { NotionMock } from '../../tests/mocks/notionMock';
 import { handleApiRequest, type ServerEnv } from '../../api/_router';
 import { AppStore } from './store';
 import { computeDay } from './events';
+import type { DayLog } from './events';
+import { mergeDayLogs, parseDayLog, serializeDayLog } from '../../shared/dayLog';
 import { memoryStore } from './storage.test';
 import { HOUR_MS, dateKeyToEpoch } from './time';
 import { MAX_TODOS } from './todos';
@@ -1448,5 +1450,75 @@ describe('업무 리스트(할 일)', () => {
 
     expect(store.todosFor(DAY).map((t) => t.text)).toEqual(['어딘가에는 남아야 함']);
     expect(mock.pages).toHaveLength(1);
+  });
+});
+
+describe('근무시간 정정 — 저장과 기기 간 병합', () => {
+  it('직렬화했다가 다시 읽어도 정정이 그대로다 (사유의 공백 포함)', () => {
+    const log: DayLog = {
+      date: '2026-08-18',
+      events: [{ type: 'clock_in', at: dateKeyToEpoch('2026-08-18') + 9 * 3600000 }],
+      vacationMs: 0,
+      updatedAt: 1000,
+      correctionAt: 2000,
+      correction: { actualMs: 8 * 3600000, beforeMs: 14 * 3600000, reason: '퇴근 찍는 것을 잊음' },
+    };
+
+    const back = parseDayLog('2026-08-18', serializeDayLog(log))!;
+    expect(back.correction).toEqual(log.correction);
+    expect(back.correctionAt).toBe(2000);
+    expect(back.events).toHaveLength(1);
+  });
+
+  it('나중에 정정한 쪽이 이긴다', () => {
+    const base: DayLog = { date: '2026-08-18', events: [], vacationMs: 0, updatedAt: 1 };
+    const a: DayLog = {
+      ...base,
+      correctionAt: 100,
+      correction: { actualMs: 3 * 3600000, beforeMs: 0, reason: '먼저' },
+    };
+    const b: DayLog = {
+      ...base,
+      correctionAt: 200,
+      correction: { actualMs: 5 * 3600000, beforeMs: 0, reason: '나중' },
+    };
+    expect(mergeDayLogs(a, b)!.correction?.reason).toBe('나중');
+    expect(mergeDayLogs(b, a)!.correction?.reason).toBe('나중');
+  });
+
+  it('정정을 취소하면 다른 기기의 옛 정정이 되살아나지 않는다', () => {
+    const withCorrection: DayLog = {
+      date: '2026-08-18',
+      events: [],
+      vacationMs: 0,
+      updatedAt: 100,
+      correctionAt: 100,
+      correction: { actualMs: 3 * 3600000, beforeMs: 0, reason: '옛 정정' },
+    };
+    // 취소한 쪽: 정정은 없지만 "언제 취소했는지"는 남아 있다
+    const cleared: DayLog = { date: '2026-08-18', events: [], vacationMs: 0, updatedAt: 200, correctionAt: 200 };
+
+    expect(mergeDayLogs(withCorrection, cleared)!.correction).toBeUndefined();
+    expect(mergeDayLogs(cleared, withCorrection)!.correction).toBeUndefined();
+  });
+
+  it('퇴근만 누른 기기가 다른 기기의 정정을 지우지 않는다', () => {
+    const corrected: DayLog = {
+      date: '2026-08-18',
+      events: [],
+      vacationMs: 0,
+      updatedAt: 100,
+      correctionAt: 100,
+      correction: { actualMs: 8 * 3600000, beforeMs: 0, reason: '정정' },
+    };
+    // 나중에 출퇴근만 눌러 updatedAt 이 더 큰 기기 (정정은 만진 적 없음)
+    const clockedOut: DayLog = {
+      date: '2026-08-18',
+      events: [{ type: 'clock_in', at: 500 }],
+      vacationMs: 0,
+      updatedAt: 999,
+    };
+
+    expect(mergeDayLogs(corrected, clockedOut)!.correction?.reason).toBe('정정');
   });
 });

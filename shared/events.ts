@@ -52,6 +52,35 @@ export interface DayLog {
    * 목록의 승자를 정하면 "다른 기기에서 퇴근만 눌렀는데 적어 둔 목록이 사라지는" 일이 생긴다.
    */
   todosAt?: number;
+  /**
+   * 근무시간 정정.
+   *
+   * 왜 필요한가 — 퇴근을 안 찍고 가는 일이 실제로 생긴다. 그러면 세션이 열린 채로
+   * 남아 근무시간이 계속 늘거나(진행 중), 엉뚱하게 긴 하루로 굳는다. 이벤트는
+   * append-only 라 잘못 찍힌 시각을 지울 수 없으므로, 사람이 판단한 값을 **덮어쓰는
+   * 값**으로 따로 얹는다.
+   *
+   * 원래 값(beforeMs)을 함께 남긴다 — 정정은 기록을 고치는 일이라 무엇을 무엇으로
+   * 바꿨는지 남지 않으면 나중에 아무도 검증할 수 없다.
+   */
+  correction?: DayCorrection;
+  /**
+   * 정정을 마지막으로 손댄 시각. **정정을 취소했을 때도 갱신된다.**
+   *
+   * `correction` 안이 아니라 밖에 두는 이유는 업무 리스트(todosAt)와 똑같다 —
+   * 취소는 "정정이 없음"이라는 상태인데, 시각을 정정 객체 안에 두면 취소한 순간
+   * 시각도 같이 사라져서 병합 때 다른 기기의 옛 정정이 되살아난다.
+   */
+  correctionAt?: number;
+}
+
+export interface DayCorrection {
+  /** 정정 후 실근무시간 (ms) */
+  actualMs: number;
+  /** 정정 직전에 계산되던 실근무시간 (ms) */
+  beforeMs: number;
+  /** 정정 사유 */
+  reason: string;
 }
 
 export type WorkStatus = 'not_started' | 'working' | 'away' | 'finished';
@@ -87,6 +116,12 @@ export interface DayTotals {
   pausedMs: number;
   /** 아직 진행 중인 구간이 있는지 (working | away) */
   isLive: boolean;
+  /** 사람이 근무시간을 정정했는지 */
+  corrected: boolean;
+  /** 정정 내역 (정정하지 않았으면 null) */
+  correction: DayCorrection | null;
+  /** 정정한 시각 (정정하지 않았으면 null) */
+  correctedAt: number | null;
 }
 
 /** 세션이 이 시간을 넘게 열려 있으면 "퇴근을 잊었을 가능성" 경고 */
@@ -178,19 +213,35 @@ export function computeDay(log: DayLog, now: number): DayTotals {
 
   const vacationMs = Math.max(0, log.vacationMs || 0);
 
+  // 정정이 있으면 실근무시간을 사람이 정한 값으로 갈아끼운다.
+  //
+  // 그날은 더 이상 "진행 중"이 아니다. 숫자만 고정하고 상태를 그대로 두면 화면에서
+  // 초가 계속 흐르는데 값은 안 변하는 모순된 표시가 된다. 정정은 곧 "그날은 이걸로
+  // 마감" 이라는 선언이므로 완료로 본다.
+  const correction = log.correction ?? null;
+  const corrected = correction !== null;
+  const finalActualMs = corrected ? Math.max(0, correction.actualMs) : actualMs;
+  // 정정한 날은 출퇴근 기록 유무와 상관없이 마감된 것으로 본다. 아예 안 찍은 날을
+  // 나중에 시간만 채우는 경우가 있는데, 그때 '출근 전'으로 남으면 근무시간은 있는데
+  // 상태는 미출근인 모순된 행이 Notion 에 올라간다.
+  const finalStatus: WorkStatus = corrected ? 'finished' : status;
+
   return {
     date: log.date,
-    status,
+    status: finalStatus,
     clockInAt,
     clockOutAt,
-    actualMs,
+    actualMs: finalActualMs,
     awayMs,
     vacationMs,
-    creditedMs: actualMs + vacationMs,
+    creditedMs: finalActualMs + vacationMs,
     awayCount,
     resumeCount,
     pausedMs,
-    isLive: openKind !== null,
+    isLive: corrected ? false : openKind !== null,
+    corrected,
+    correction,
+    correctedAt: corrected ? (log.correctionAt ?? null) : null,
   };
 }
 

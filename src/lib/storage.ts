@@ -10,7 +10,7 @@
  */
 
 import type { LogicalField } from '../../shared/fields';
-import type { DayLog } from './events';
+import type { DayCorrection, DayLog } from './events';
 import type { VacationConfig } from './vacation';
 import type { VacationGrant } from '../../shared/grants';
 import { defaultVacationConfig } from './vacation';
@@ -105,6 +105,18 @@ export interface OutboxEntry {
    * 사라져서 다음 동작이 있을 때까지 Notion 에 영영 가지 않는다.
    */
   seq: number;
+}
+
+/** 저장된 정정 값을 검증한다. 하나라도 이상하면 통째로 버린다 — 반쪽짜리 정정은 더 위험하다. */
+function normalizeCorrection(raw: any): DayCorrection | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const actualMs = typeof raw.actualMs === 'number' && Number.isFinite(raw.actualMs) ? Math.max(0, raw.actualMs) : null;
+  if (actualMs === null) return null;
+  return {
+    actualMs,
+    beforeMs: typeof raw.beforeMs === 'number' && Number.isFinite(raw.beforeMs) ? Math.max(0, raw.beforeMs) : 0,
+    reason: typeof raw.reason === 'string' ? raw.reason : '',
+  };
 }
 
 export interface AppState {
@@ -224,11 +236,20 @@ export function normalizeState(raw: unknown, now: number): AppState {
     // 목록을 **모두 지운** 하루도 버리면 안 된다. 그 하루가 사라지면 "비웠다"는 사실이
     // 어디에도 남지 않아 Notion 의 옛 목록이 영영 지워지지 않는다.
     const todos = Array.isArray(v.todos) ? normalizeTodos(v.todos) : null;
-    if (events.length === 0 && vacationMs === 0 && todos === null) continue;
+    // 정정만 있고 이벤트가 없는 날도 있다 (아예 안 찍고 나중에 시간만 채운 경우).
+    // 정정을 취소한 흔적(correctionAt)도 버리면 안 된다 — 그게 없으면 다음 병합에서
+    // 다른 기기의 옛 정정이 되살아난다.
+    const correction = normalizeCorrection(v.correction);
+    const hasCorrectionMark = typeof v.correctionAt === 'number' && Number.isFinite(v.correctionAt);
+    if (events.length === 0 && vacationMs === 0 && todos === null && !correction && !hasCorrectionMark) continue;
     logs[dateKey] = {
       date: dateKey,
       events,
       vacationMs,
+      ...(typeof v.correctionAt === 'number' && Number.isFinite(v.correctionAt)
+        ? { correctionAt: Math.max(0, v.correctionAt) }
+        : {}),
+      ...(correction ? { correction } : {}),
       ...(typeof v.updatedAt === 'number' && Number.isFinite(v.updatedAt)
         ? { updatedAt: Math.max(0, v.updatedAt) }
         : {}),
