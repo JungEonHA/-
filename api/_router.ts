@@ -121,6 +121,11 @@ export async function handleApiRequest(req: ApiRequest, deps: RouterDeps): Promi
         ok: true,
         notionConfigured: Boolean(env.NOTION_TOKEN),
         databaseConfigured: Boolean(env.NOTION_DATABASE_ID),
+        // 어느 DB 를 보고 있는지 밖에서 확인할 수 있어야 한다. 2026-08-18 워크스페이스를
+        // 옮길 때, 환경변수를 바꿨는데도 앱이 옛 DB 를 계속 읽는 상황을 몇 시간 동안
+        // 판정하지 못했다. id 는 노션 URL 에 그대로 드러나는 값이라 비밀이 아니지만,
+        // 그래도 앞 8자만 낸다 — 옛/새를 구분하는 데는 그걸로 충분하다.
+        databasePrefix: (env.NOTION_DATABASE_ID || '').replace(/-/g, '').slice(0, 8) || null,
         writeAllowed: env.NOTION_ALLOW_WRITE === '1',
         accessKeyRequired: Boolean(env.APP_ACCESS_KEY),
         notionVersion: env.NOTION_VERSION || '2022-06-28',
