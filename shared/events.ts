@@ -303,20 +303,38 @@ export function computeDay(log: DayLog, now: number): DayTotals {
   //
   // 그날은 더 이상 "진행 중"이 아니다. 숫자만 고정하고 상태를 그대로 두면 화면에서
   // 초가 계속 흐르는데 값은 안 변하는 모순된 표시가 된다. 정정은 곧 "그날은 이걸로
-  // 마감" 이라는 선언이므로 완료로 본다.
+  // 마감" 이라는 선언이므로 완료로 본다 — **단, 그 이후에 다시 업무에 복귀했다면 얘기가
+  // 다르다.** 정정 시각(correctionAt) 이후에 새 이벤트가 있다면 그날은 다시 열린
+  // 것이므로, 정정으로 확정된 값(과거분)에 정정 이후 실제로 일한 시간(현재분)을
+  // 더해서 보여준다. 정정을 통째로 무시해 버리면 정정 전의 잘못된 값(예: 퇴근을 못
+  // 찍어 부풀려진 시간)이 되살아나므로, 정정은 유지한 채 그 뒤만 이어 붙인다.
   const correction = log.correction ?? null;
   const corrected = correction !== null;
-  const finalActualMs = corrected ? Math.max(0, correction.actualMs) : actualMs;
+  const correctionAt = log.correctionAt ?? 0;
+  const resumedAfterCorrection = corrected && log.events.some((ev) => ev.at > correctionAt);
+
+  let postCorrectionActualMs = 0;
+  if (resumedAfterCorrection) {
+    for (const seg of walk.segments) {
+      if (seg.kind !== 'work' || seg.end <= correctionAt) continue;
+      postCorrectionActualMs += Math.max(0, seg.end - Math.max(seg.start, correctionAt));
+    }
+  }
+
+  const finalActualMs = corrected ? Math.max(0, correction.actualMs) + postCorrectionActualMs : actualMs;
   // 정정한 날은 출퇴근 기록 유무와 상관없이 마감된 것으로 본다. 아예 안 찍은 날을
   // 나중에 시간만 채우는 경우가 있는데, 그때 '출근 전'으로 남으면 근무시간은 있는데
-  // 상태는 미출근인 모순된 행이 Notion 에 올라간다.
-  const finalStatus: WorkStatus = corrected ? 'finished' : status;
+  // 상태는 미출근인 모순된 행이 Notion 에 올라간다. 다시 복귀했다면 실제 상태(근무
+  // 중/자리 비움/퇴근)를 그대로 보여준다.
+  const finalStatus: WorkStatus = corrected && !resumedAfterCorrection ? 'finished' : status;
 
   // 구간을 잘라서 정정했다면 출퇴근 시각도 그 구간을 따른다 — 근무시간은 5시까지인데
-  // 표시는 10시 퇴근으로 남아 있으면 어느 쪽이 맞는지 알 수 없다.
-  const fixed = corrected
-    ? [...(correction.segments ?? [])].filter((s) => s.end > s.start).sort((a, b) => a.start - b.start)
-    : [];
+  // 표시는 10시 퇴근으로 남아 있으면 어느 쪽이 맞는지 알 수 없다. 다시 복귀한 뒤에는
+  // 정정 구간이 아니라 실제 출퇴근 시각을 보여준다.
+  const fixed =
+    corrected && !resumedAfterCorrection
+      ? [...(correction.segments ?? [])].filter((s) => s.end > s.start).sort((a, b) => a.start - b.start)
+      : [];
   const finalClockInAt = fixed.length > 0 ? fixed[0]!.start : clockInAt;
   const finalClockOutAt = fixed.length > 0 ? fixed[fixed.length - 1]!.end : clockOutAt;
 
@@ -332,7 +350,7 @@ export function computeDay(log: DayLog, now: number): DayTotals {
     awayCount,
     resumeCount,
     pausedMs,
-    isLive: corrected ? false : openKind !== null,
+    isLive: corrected && !resumedAfterCorrection ? false : openKind !== null,
     corrected,
     correction,
     correctedAt: corrected ? (log.correctionAt ?? null) : null,
@@ -431,21 +449,14 @@ export function applyAction(log: DayLog, action: ActionKind, at: number): Transi
   const last = log.events.length > 0 ? log.events[log.events.length - 1]! .at : -Infinity;
   const stamped = Math.max(at, last);
 
-  const next: DayLog = {
-    ...log,
-    events: [...log.events, { type: action, at: stamped }],
-    updatedAt: stamped,
+  return {
+    ok: true,
+    log: {
+      ...log,
+      events: [...log.events, { type: action, at: stamped }],
+      updatedAt: stamped,
+    },
   };
-
-  // '업무 복귀'는 정정으로 마감돼 있던 하루를 다시 여는 동작이다. 정정을 그대로
-  // 두면 computeDay 가 상태를 영원히 'finished' 로 고정해 버려서, 이벤트는 쌓이는데
-  // 화면은 계속 퇴근 완료로 보이는(복귀가 아무 효과도 없는 것처럼 보이는) 상태가 된다.
-  if (action === 'resume' && next.correction) {
-    delete next.correction;
-    next.correctionAt = stamped;
-  }
-
-  return { ok: true, log: next };
 }
 
 /**

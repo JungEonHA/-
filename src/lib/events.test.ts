@@ -289,22 +289,34 @@ describe('퇴근 취소 / 업무 복귀', () => {
   it('정정으로 마감된 날도 복귀하면 다시 흐른다 (정정이 상태를 영원히 가두면 안 된다)', () => {
     const log: DayLog = {
       date: '2026-08-20',
-      events: [{ type: 'clock_in', at: at('09:00') }],
+      events: [
+        { type: 'clock_in', at: at('01:00') },
+        { type: 'clock_out', at: at('08:00') }, // 퇴근을 늦게 찍어 7시간으로 부풀어 있었음
+      ],
       vacationMs: 0,
-      correctionAt: at('09:30'),
-      correction: { actualMs: 8 * HOUR_MS, beforeMs: 0, reason: '테스트 정정' },
+      correctionAt: at('08:01'),
+      // 실제로는 02:00 에 끝났다고 판단해 1시간으로 정정 — 부풀려진 7시간을 되돌림
+      correction: { actualMs: 1 * HOUR_MS, beforeMs: 7 * HOUR_MS, reason: '퇴근 찍는 것을 잊음' },
     };
-    expect(computeDay(log, at('10:00')).status).toBe('finished'); // 정정 직후엔 마감 상태
 
-    const res = applyAction(log, 'resume', at('11:00'));
+    const before = computeDay(log, at('09:00'));
+    expect(before.status).toBe('finished'); // 정정 직후엔 마감 상태
+    expect(before.actualMs).toBe(1 * HOUR_MS);
+    expect(before.isLive).toBe(false);
+
+    const res = applyAction(log, 'resume', at('10:00'));
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
-    const totals = computeDay(res.log, at('12:00'));
+    const totals = computeDay(res.log, at('11:00'));
     expect(totals.status).toBe('working'); // 복귀했으면 다시 근무 중이어야 한다
     expect(totals.isLive).toBe(true);
-    expect(totals.corrected).toBe(false);
-    expect(res.log.correction).toBeUndefined();
+    // 정정으로 확정된 1시간 + 복귀(10:00) 이후 실제로 일한 1시간(10:00~11:00).
+    // 정정 이전의 부풀려진 7시간은 되살아나면 안 된다.
+    expect(totals.actualMs).toBe(2 * HOUR_MS);
+    // 정정 기록 자체는 지우지 않고 그대로 남긴다 — 이력은 살아 있어야 한다.
+    expect(res.log.correction).toEqual(log.correction);
+    expect(totals.corrected).toBe(true);
   });
 
   it('여러 번 퇴근/복귀를 반복해도 누적이 어긋나지 않는다', () => {
