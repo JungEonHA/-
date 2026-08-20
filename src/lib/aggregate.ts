@@ -57,12 +57,19 @@ export function summarizeWeek(
   return { weekStart: startOfWeek(anchorDateKey), days, ...reduceTotals(days) };
 }
 
-/** 지정 월(KST)의 집계 */
+/**
+ * 근무 타이머 앱이 실제로 쓰이기 시작한 날짜(KST). 이보다 이전 기록은 앱이 만들어지기
+ * 전에 다른 경로로 들어온 값이라 월간 합계에 넣으면 안 된다.
+ */
+export const MONTHLY_AGGREGATION_START = '2026-08-10';
+
+/** 지정 월(KST)의 집계. 앱 시작일(MONTHLY_AGGREGATION_START) 이전 날짜는 제외한다. */
 export function summarizeMonth(
   logs: Record<string, DayLog>,
   now: number,
   monthKey = toMonthKey(now),
 ): MonthSummary {
-  const days = totalsFor(logs, monthDateKeys(monthKey), now);
+  const dateKeys = monthDateKeys(monthKey).filter((key) => key >= MONTHLY_AGGREGATION_START);
+  const days = totalsFor(logs, dateKeys, now);
   return { monthKey, days, ...reduceTotals(days) };
 }

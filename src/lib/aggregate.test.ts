@@ -67,15 +67,16 @@ describe('주간 집계', () => {
 describe('월간 집계', () => {
   const month = summarizeMonth(LOGS, NOW, '2026-08');
 
-  it('해당 월의 모든 날짜를 담는다', () => {
-    expect(month.days).toHaveLength(31);
+  it('앱 시작일(8/10) 이후 날짜만 담는다', () => {
+    expect(month.days).toHaveLength(22); // 8/10 ~ 8/31
+    expect(month.days.every((d) => d.date >= '2026-08-10')).toBe(true);
   });
 
-  it('월 전체 합계를 낸다 (8/3 지난주 포함, 9월 제외)', () => {
-    expect(month.actualMs).toBe(39 * HOUR_MS); // 30 + 9(8/3)
+  it('월 합계를 낸다 (8/10 이전 기록인 8/3 은 제외, 9월도 제외)', () => {
+    expect(month.actualMs).toBe(30 * HOUR_MS); // 8/3(9h) 제외
     expect(month.vacationMs).toBe(12 * HOUR_MS);
-    expect(month.creditedMs).toBe(51 * HOUR_MS);
-    expect(month.workedDays).toBe(6);
+    expect(month.creditedMs).toBe(42 * HOUR_MS);
+    expect(month.workedDays).toBe(5);
   });
 
   it('다음 달은 별도로 집계된다', () => {
