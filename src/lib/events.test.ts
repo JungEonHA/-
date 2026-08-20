@@ -286,6 +286,27 @@ describe('퇴근 취소 / 업무 복귀', () => {
     expect(res.ok).toBe(false);
   });
 
+  it('정정으로 마감된 날도 복귀하면 다시 흐른다 (정정이 상태를 영원히 가두면 안 된다)', () => {
+    const log: DayLog = {
+      date: '2026-08-20',
+      events: [{ type: 'clock_in', at: at('09:00') }],
+      vacationMs: 0,
+      correctionAt: at('09:30'),
+      correction: { actualMs: 8 * HOUR_MS, beforeMs: 0, reason: '테스트 정정' },
+    };
+    expect(computeDay(log, at('10:00')).status).toBe('finished'); // 정정 직후엔 마감 상태
+
+    const res = applyAction(log, 'resume', at('11:00'));
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    const totals = computeDay(res.log, at('12:00'));
+    expect(totals.status).toBe('working'); // 복귀했으면 다시 근무 중이어야 한다
+    expect(totals.isLive).toBe(true);
+    expect(totals.corrected).toBe(false);
+    expect(res.log.correction).toBeUndefined();
+  });
+
   it('여러 번 퇴근/복귀를 반복해도 누적이 어긋나지 않는다', () => {
     const log = run([
       ['clock_in', '09:00'],

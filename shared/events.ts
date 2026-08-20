@@ -431,14 +431,21 @@ export function applyAction(log: DayLog, action: ActionKind, at: number): Transi
   const last = log.events.length > 0 ? log.events[log.events.length - 1]! .at : -Infinity;
   const stamped = Math.max(at, last);
 
-  return {
-    ok: true,
-    log: {
-      ...log,
-      events: [...log.events, { type: action, at: stamped }],
-      updatedAt: stamped,
-    },
+  const next: DayLog = {
+    ...log,
+    events: [...log.events, { type: action, at: stamped }],
+    updatedAt: stamped,
   };
+
+  // '업무 복귀'는 정정으로 마감돼 있던 하루를 다시 여는 동작이다. 정정을 그대로
+  // 두면 computeDay 가 상태를 영원히 'finished' 로 고정해 버려서, 이벤트는 쌓이는데
+  // 화면은 계속 퇴근 완료로 보이는(복귀가 아무 효과도 없는 것처럼 보이는) 상태가 된다.
+  if (action === 'resume' && next.correction) {
+    delete next.correction;
+    next.correctionAt = stamped;
+  }
+
+  return { ok: true, log: next };
 }
 
 /**
