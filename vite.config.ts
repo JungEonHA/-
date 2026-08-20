@@ -12,8 +12,14 @@ import { notionDevApiPlugin } from './scripts/vite-plugin-notion-api';
 // (Vercel / Cloudflare). Defaults to root.
 const base = process.env.BASE_PATH ?? '/';
 
+// 이 번들이 어느 배포에서 나왔는지. 서버(/api/health)가 같은 값을 돌려주므로,
+// 앱은 자기 코드가 낡았는지 스스로 알 수 있다. 노션에 임베드한 위젯은 iframe 이
+// 며칠씩 그대로 떠 있어서 고친 코드가 반영되지 않은 채 계속 돌아간다.
+const buildId = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 8) ?? 'dev';
+
 export default defineConfig({
   base,
+  define: { __BUILD_ID__: JSON.stringify(buildId) },
   plugins: [react(), notionDevApiPlugin()],
   build: {
     outDir: 'dist',

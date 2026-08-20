@@ -580,6 +580,24 @@ describe('API 라우터', () => {
     expect(JSON.stringify(res.body)).not.toContain(mock.token);
   });
 
+  it('/health 는 배포된 커밋 앞 8자를 알려준다 (화면이 낡았는지 판정하는 기준)', async () => {
+    const mock = realisticMock();
+    const res = await handleApiRequest(req({ method: 'GET', path: '/health' }), {
+      env: { ...envFor(mock), VERCEL_GIT_COMMIT_SHA: 'e497da491b5acb8fd234fa9caa75e5216b0a1a32' },
+      fetchImpl: mock.fetchImpl,
+    });
+    expect(res.body).toMatchObject({ build: 'e497da49' });
+  });
+
+  it('커밋을 알 수 없는 배포에서는 build 가 null 이다', async () => {
+    const mock = realisticMock();
+    const res = await handleApiRequest(req({ method: 'GET', path: '/health' }), {
+      env: envFor(mock),
+      fetchImpl: mock.fetchImpl,
+    });
+    expect(res.body).toMatchObject({ build: null });
+  });
+
   it('토큰 미설정 시 503 과 안내 메시지', async () => {
     const res = await handleApiRequest(req({ method: 'GET', path: '/notion/schema' }), { env: {} });
     expect(res.status).toBe(503);

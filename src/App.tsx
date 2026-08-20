@@ -9,7 +9,7 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { WidgetPanel } from './components/WidgetPanel';
 import { computeDay } from './lib/events';
 import { DAY_MS, formatClockSeconds, toDateKey } from './lib/time';
-import { StatusChip } from './components/ui';
+import { StatusChip, UpdateBanner } from './components/ui';
 
 type Tab = 'home' | 'todo' | 'vacation' | 'summary' | 'settings';
 
@@ -71,6 +71,7 @@ export default function App({ widget = false }: { widget?: boolean }) {
       lastPullAt = Date.now();
       void store.pullDay(store.activeDate);
       void store.pullGrants();
+      void store.checkForUpdate();
     };
     document.addEventListener('visibilitychange', pull);
     window.addEventListener('focus', pull);
@@ -85,6 +86,9 @@ export default function App({ widget = false }: { widget?: boolean }) {
     const timer = setInterval(() => {
       if (document.visibilityState === 'hidden') return;
       void store.pullDay(store.activeDate);
+      // 위젯은 노션 페이지가 닫히기 전까지 다시 로드되지 않는다. 새 배포를 스스로
+      // 알아채지 못하면 고친 코드가 며칠씩 반영되지 않는다.
+      void store.checkForUpdate();
     }, WIDGET_PULL_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [store, widget]);
@@ -135,6 +139,8 @@ export default function App({ widget = false }: { widget?: boolean }) {
         <span className="header__spacer" />
         <StatusChip status={todayTotals.status} testId="header-status-chip" />
       </header>
+
+      {runtime.staleBuild && <UpdateBanner />}
 
       <nav className="nav" aria-label="주요 메뉴">
         {TABS.map((t) => (

@@ -564,6 +564,15 @@ button { font-family: inherit; }
 .banner--danger { background: var(--danger-soft); color: var(--danger); }
 .banner--success { background: var(--success-soft); color: var(--success); }
 
+/* 눌러서 실행하는 배너. 버튼이라 브라우저 기본 스타일을 지워야 줄과 같아 보인다. */
+.banner--action {
+  width: 100%;
+  border: 0;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
 .toast {
   position: fixed;
   left: 50%;

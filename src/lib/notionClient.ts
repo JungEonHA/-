@@ -18,6 +18,8 @@ export interface HealthInfo {
   writeAllowed: boolean;
   accessKeyRequired: boolean;
   notionVersion: string;
+  /** 서버에 배포된 커밋 앞 8자. 옛 배포에는 없으므로 선택 필드다. */
+  build?: string | null;
 }
 
 export interface ApiErrorShape {

@@ -4,6 +4,7 @@ import App from './App';
 import { AppStore } from './lib/store';
 import { StoreContext } from './hooks/useAppStore';
 import { parseBootParams, urlWithoutSecrets } from './lib/bootParams';
+import { BUILD_ID } from './lib/build';
 import './styles.css';
 
 const boot = parseBootParams(window.location.search);
@@ -29,9 +30,12 @@ if (cleanedUrl) window.history.replaceState(null, '', cleanedUrl);
 declare global {
   interface Window {
     __worktimeStore?: AppStore;
+    /** 이 화면이 돌리는 코드의 커밋. 위젯이 낡았는지 밖에서 물어볼 수 있어야 한다. */
+    __worktimeBuild?: string;
   }
 }
 window.__worktimeStore = store;
+window.__worktimeBuild = BUILD_ID;
 
 const root = document.getElementById('root');
 if (!root) throw new Error('#root 를 찾을 수 없습니다.');

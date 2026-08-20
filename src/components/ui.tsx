@@ -89,6 +89,27 @@ export function Banner({
   );
 }
 
+/**
+ * 이 화면이 낡은 코드를 돌리고 있을 때 띄우는 줄.
+ *
+ * 노션 임베드 위젯은 iframe 이 며칠씩 그대로 살아 있어서, 버그를 고쳐 배포해도
+ * 화면은 옛 코드를 계속 돌린다. 사용자 입장에서는 "고쳤다는데 그대로"이고,
+ * 밖에서는 어느 코드가 도는지 볼 방법조차 없었다. 그래서 앱이 직접 알린다.
+ */
+export function UpdateBanner() {
+  return (
+    <button
+      type="button"
+      className="banner banner--warn banner--action"
+      data-testid="update-banner"
+      onClick={() => window.location.reload()}
+    >
+      <span aria-hidden="true">🔄</span>
+      <span>앱이 업데이트되었습니다 — 눌러서 새로고침하세요.</span>
+    </button>
+  );
+}
+
 export function EmptyState({ children }: { children: ReactNode }) {
   return <p className="empty">{children}</p>;
 }

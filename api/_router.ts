@@ -33,6 +33,8 @@ export interface ServerEnv {
   NOTION_ALLOW_WRITE?: string;
   APP_ACCESS_KEY?: string;
   ALLOWED_ORIGINS?: string;
+  /** Vercel 이 배포마다 넣어 주는 커밋 해시. /health 가 앞 8자만 돌려준다. */
+  VERCEL_GIT_COMMIT_SHA?: string;
 }
 
 export interface ApiRequest {
@@ -129,6 +131,9 @@ export async function handleApiRequest(req: ApiRequest, deps: RouterDeps): Promi
         writeAllowed: env.NOTION_ALLOW_WRITE === '1',
         accessKeyRequired: Boolean(env.APP_ACCESS_KEY),
         notionVersion: env.NOTION_VERSION || '2022-06-28',
+        // 지금 배포된 코드가 어느 커밋인지. 프론트는 자기 번들에 박힌 값과 비교해
+        // "화면이 돌리는 코드가 낡았다"를 스스로 판정한다 (아래 build 필드).
+        build: (env.VERCEL_GIT_COMMIT_SHA || '').slice(0, 8) || null,
       },
       cors,
     );

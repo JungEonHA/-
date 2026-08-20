@@ -3,6 +3,7 @@ import { FIELD_SPECS, type LogicalField } from '../../shared/fields';
 import { useSnapshot, useStore } from '../hooks/useAppStore';
 import { HOUR_MS, formatClockSeconds, formatDateKeyKo } from '../lib/time';
 import { MAX_AUTO_ATTEMPTS } from '../lib/store';
+import { BUILD_ID } from '../lib/build';
 import { Banner, Card, EmptyState } from './ui';
 
 export function SettingsPanel() {
@@ -309,6 +310,9 @@ function ConnectionCard() {
       <Banner kind="success">
         백엔드 연결됨 · Notion API {runtime.backendInfo?.notionVersion}
         {runtime.backendInfo?.writeAllowed === false && ' · 쓰기 비활성(NOTION_ALLOW_WRITE≠1)'}
+        {/* 이 화면이 도는 코드 / 서버에 배포된 코드. 둘이 다르면 화면이 낡은 것이다. */}
+        {` · 화면 ${BUILD_ID}`}
+        {runtime.backendInfo?.build && ` · 서버 ${runtime.backendInfo.build}`}
       </Banner>
     ) : runtime.backend === 'checking' ? (
       <Banner kind="info">백엔드 상태를 확인하는 중…</Banner>

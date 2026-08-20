@@ -50,6 +50,7 @@ export default async function handler(req: NodeLikeRequest, res: NodeLikeRespons
       NOTION_ALLOW_WRITE: process.env.NOTION_ALLOW_WRITE,
       APP_ACCESS_KEY: process.env.APP_ACCESS_KEY,
       ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
+      VERCEL_GIT_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA,
     },
   });
 

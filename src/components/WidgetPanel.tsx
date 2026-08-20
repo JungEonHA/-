@@ -16,7 +16,7 @@ import { formatClock, formatDateKeyKo, formatDuration, formatDurationKo } from '
 import { MAX_TODO_TEXT, todoSummary } from '../lib/todos';
 import { fullViewUrl } from '../lib/bootParams';
 import { useSnapshot, useStore } from '../hooks/useAppStore';
-import { StatusChip } from './ui';
+import { StatusChip, UpdateBanner } from './ui';
 
 export function WidgetPanel({ now }: { now: number }) {
   const store = useStore();
@@ -57,6 +57,8 @@ export function WidgetPanel({ now }: { now: number }) {
         <span className="header__spacer" />
         <span className="widget__day">{formatDateKeyKo(activeDate)}</span>
       </div>
+
+      {runtime.staleBuild && <UpdateBanner />}
 
       {alert && (
         <p className={`widget__alert widget__alert--${alert.kind}`} data-testid="widget-alert">
@@ -306,6 +308,9 @@ function WidgetSetup({ reason, onSkip }: { reason: string | null; onSkip: () => 
         <span className="header__spacer" />
         <span className="widget__day">최초 1회 설정</span>
       </div>
+
+      {/* 연결이 안 풀리는 원인이 낡은 코드일 수도 있다. 설정 화면에서도 알린다. */}
+      {runtime.staleBuild && <UpdateBanner />}
 
       <p className="widget__alert widget__alert--warn">
         {reason ?? '접근 키와 이름을 넣으면 이 위젯이 그 사람의 기록으로 동작합니다.'}

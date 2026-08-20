@@ -20,6 +20,7 @@ import {
   type CorrectedSegment,
   type DayLog,
 } from './events';
+import { BUILD_ID, isStaleBuild } from './build';
 import { buildRecord } from './record';
 import {
   ApiError,
@@ -83,6 +84,15 @@ export interface RuntimeState {
    * 계속 떠 있는다.
    */
   syncBlocked: string | null;
+  /**
+   * 이 화면이 돌리고 있는 코드가 서버에 배포된 것보다 낡았는가.
+   *
+   * 노션에 임베드한 위젯은 iframe 이라 노션 페이지를 닫기 전에는 다시 로드되지 않는다.
+   * 그래서 버그를 고쳐 배포해도 위젯은 며칠 전 코드를 그대로 돌린다 — 2026-08-20 에
+   * 정정한 날의 '업무 복귀'가 먹지 않는다는 문의가 그 상황이었다. 고친 코드는 이미
+   * 배포돼 있었고, 화면만 옛 번들이었다. 밖에서는 구분할 방법이 아예 없었다.
+   */
+  staleBuild: boolean;
 }
 
 export interface Snapshot {
@@ -160,6 +170,7 @@ export class AppStore {
         syncing: false,
         notice: null,
         syncBlocked: null,
+        staleBuild: false,
       },
     };
 
@@ -721,6 +732,23 @@ export class AppStore {
    * 1분마다 무한히 나가므로, 'unavailable' 로 확정된 뒤에는 재확인 간격을 늘린다.
    * 사용자가 직접 누르는 "연결 확인"은 force 로 항상 즉시 확인한다.
    */
+  /**
+   * 서버에 새 배포가 올라왔는지만 확인한다.
+   *
+   * `checkBackend` 와 따로 두는 이유: 그쪽은 확인하는 동안 backend 를 'checking' 으로
+   * 되돌려서 화면이 잠깐 깜빡인다. 이건 하루 종일 떠 있는 위젯이 주기적으로 부르는
+   * 경로라 아무것도 흔들지 않아야 한다. 실패는 그냥 무시한다 — 다음 차례가 있다.
+   */
+  async checkForUpdate(): Promise<void> {
+    if (BUILD_ID === 'dev') return;
+    try {
+      const info = await getHealth(this.clientConfig());
+      this.setRuntime({ staleBuild: isStaleBuild(info.build) });
+    } catch {
+      // 네트워크가 끊긴 것과 낡은 것은 다르다. 판정을 바꾸지 않는다.
+    }
+  }
+
   async checkBackend(opts: { force?: boolean } = {}): Promise<void> {
     const now = this.now();
     if (
@@ -739,6 +767,7 @@ export class AppStore {
       this.setRuntime({
         backend: usable ? 'ready' : 'error',
         backendInfo: info,
+        staleBuild: isStaleBuild(info.build),
         backendError: usable
           ? null
           : 'NOTION_TOKEN / NOTION_DATABASE_ID 환경변수가 서버에 설정되지 않았습니다.',
