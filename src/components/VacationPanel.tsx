@@ -1,19 +1,22 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSnapshot, useStore } from '../hooks/useAppStore';
 import { computeBalance, vacationHistory } from '../lib/vacation';
 import {
   HOUR_MS,
+  WEEKDAY_LABELS_KO,
   addMonths,
+  dayOfWeek,
   formatDateKeyKo,
   formatDurationKo,
   formatMonthKeyKo,
   toDateKey,
   toMonthKey,
 } from '../lib/time';
+import { dailyTargetHours } from '../../shared/dailyTargets';
 import { GRANTOR_NAME, canGrantVacation } from '../../shared/grants';
 import { Banner, Card, EmptyState, Tile } from './ui';
 
-const PRESET_HOURS = [1, 2, 4, 8] as const;
+const PRESET_HOURS: readonly number[] = [1, 2, 4, 8];
 
 /** 부여 사유로 자주 쓰는 것들. 눌러서 채우고 그대로 고쳐 쓸 수 있다. */
 const REASON_PRESETS = ['특별 휴가', '개인 일정', '천재지변', '집안 사정', '포상'] as const;
@@ -28,15 +31,33 @@ export function VacationPanel({ now }: { now: number }) {
 
   const [monthKey, setMonthKey] = useState(() => toMonthKey(now));
   const [dateKey, setDateKey] = useState(() => toDateKey(now));
-  const [hours, setHours] = useState<number>(1);
+
+  // 쓰는 쪽도 같은 표를 본다. 부여만 자동이면 정작 하루에 얹을 때 또 손으로 적게 된다.
+  const useTargetHours = dailyTargetHours(state.notion.employeeName, dateKey);
+  const [hours, setHours] = useState<number>(() => useTargetHours ?? 1);
+  useEffect(() => {
+    if (useTargetHours !== null) setHours(useTargetHours);
+  }, [dateKey, useTargetHours]);
 
   const [grantDate, setGrantDate] = useState(() => toDateKey(now));
-  const [grantHours, setGrantHours] = useState<string>('8');
   const [grantReason, setGrantReason] = useState('');
   const [granting, setGranting] = useState(false);
   // 기본값은 자기 자신이다. 남의 계정을 기본으로 두면 무심코 눌렀을 때 엉뚱한
   // 사람에게 휴가가 꽂힌다 — 옮기는 것보다 되돌리는 쪽이 늘 번거롭다.
   const [grantTarget, setGrantTarget] = useState(() => state.notion.employeeName.trim());
+
+  // 그 사람이 그 요일에 채워야 하는 시간. 휴가는 이 시간을 메워 주는 것이므로
+  // 부여량은 거의 항상 이 값이다 — 손으로 적게 하면 틀릴 여지만 생긴다.
+  const grantTargetHours = dailyTargetHours(grantTarget, grantDate);
+  const [grantHours, setGrantHours] = useState<string>(() => String(grantTargetHours ?? 8));
+
+  // 대상이나 날짜를 바꾸면 그 요일 기준으로 다시 채운다.
+  //
+  // 채운 뒤에 사람이 고친 값은 그대로 둔다 (타이핑은 이 효과를 다시 돌리지 않는다).
+  // 예외적인 부여 — 반차처럼 표와 다른 시간 — 을 막지 않기 위해서다.
+  useEffect(() => {
+    if (grantTargetHours !== null) setGrantHours(String(grantTargetHours));
+  }, [grantTarget, grantDate, grantTargetHours]);
 
   const balance = computeBalance(state.logs, state.vacation, monthKey, state.grants);
   const monthGrants = state.grants.filter((g) => g.dateKey.slice(0, 7) === monthKey);
@@ -140,6 +161,17 @@ export function VacationPanel({ now }: { now: number }) {
         <div className="field">
           <span className="field__label">시간</span>
           <div className="segmented">
+            {/* 그 요일에 채워야 하는 시간. 프리셋에 이미 있는 값이면 따로 내지 않는다. */}
+            {useTargetHours !== null && !PRESET_HOURS.includes(useTargetHours) && (
+              <button
+                type="button"
+                className={`btn btn--sm ${hours === useTargetHours ? 'btn--primary' : 'btn--ghost'}`}
+                data-testid="vac-preset-target"
+                onClick={() => setHours(useTargetHours)}
+              >
+                {useTargetHours}시간
+              </button>
+            )}
             {PRESET_HOURS.map((h) => (
               <button
                 key={h}
@@ -152,6 +184,12 @@ export function VacationPanel({ now }: { now: number }) {
               </button>
             ))}
           </div>
+          {useTargetHours !== null && (
+            <span className="field__hint" data-testid="vac-target-hint">
+              {WEEKDAY_LABELS_KO[dayOfWeek(dateKey)]}요일에 채워야 하는 시간은{' '}
+              <b>{useTargetHours}시간</b>이라 그 값으로 맞춰 두었습니다.
+            </span>
+          )}
         </div>
 
         <div className="btnRow mt8">
@@ -251,6 +289,19 @@ export function VacationPanel({ now }: { now: number }) {
             data-testid="grant-hours"
             onChange={(e) => setGrantHours(e.target.value)}
           />
+          <span className="field__hint" data-testid="grant-hours-hint">
+            {grantTargetHours === null ? (
+              <>
+                {grantTarget || '이 사람'}의 요일별 근무시간이 등록되어 있지 않아 자동으로 채우지
+                못합니다. 직접 입력하세요.
+              </>
+            ) : (
+              <>
+                {WEEKDAY_LABELS_KO[dayOfWeek(grantDate)]}요일 {grantTarget} 기준{' '}
+                <b>{grantTargetHours}시간</b>으로 채웠습니다. 반차처럼 다르게 줄 때만 고치세요.
+              </>
+            )}
+          </span>
         </div>
 
         <div className="field">
