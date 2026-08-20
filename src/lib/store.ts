@@ -554,18 +554,25 @@ export class AppStore {
     try {
       const { employeeName, mapping } = this.snapshot.state.notion;
       const target = (args.targetEmployee ?? employeeName).trim() || null;
-      await apiAddGrant(this.clientConfig(), {
+      const res = await apiAddGrant(this.clientConfig(), {
         employeeName: target,
         dateKey: args.dateKey,
         hours: args.hours,
         reason,
         mapping,
+        grantedBy: employeeName.trim() || null,
       });
       await this.pullGrants();
-      this.notify(
-        'success',
-        `${args.dateKey} ${target ?? ''} 특별 휴가 ${args.hours}시간을 부여했습니다.`.replace('  ', ' '),
-      );
+
+      // 부여는 됐는데 알림만 못 갔을 수 있다. 그때 "부여했습니다"만 뜨면 대표는
+      // 상대가 소식을 받은 줄 알고 넘어간다 — 말로 알려야 한다는 사실을 알려 준다.
+      const base = `${args.dateKey} ${target ?? ''} 특별 휴가 ${args.hours}시간을 부여했습니다.`
+        .replace('  ', ' ');
+      if (res.notice?.sent === false && res.notice.reason === 'failed') {
+        this.notify('info', `${base} 다만 디스코드 알림은 실패했습니다 — 직접 알려 주세요.`);
+      } else {
+        this.notify('success', res.notice?.sent ? `${base} 디스코드에도 알렸습니다.` : base);
+      }
       return true;
     } catch (err) {
       this.notify('error', `부여하지 못했습니다: ${(err as Error).message}`);

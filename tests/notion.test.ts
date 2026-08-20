@@ -862,6 +862,104 @@ describe('특별 휴가 부여 API', () => {
     expect(page.properties['근무일']).toEqual({ date: { start: '2026-08-13' } });
   });
 
+  it('부여가 노션에 쓰인 뒤 디스코드 근무현황 채널로 알림이 나간다', async () => {
+    const mock = grantMock();
+    const sent: Array<{ url: string; body: any }> = [];
+
+    const res = await handleApiRequest(
+      req({
+        method: 'POST',
+        path: '/notion/grants',
+        body: {
+          employee: '박진규',
+          dateKey: '2026-08-13',
+          hours: 16,
+          reason: 'BIC 전시 참가',
+          grantedBy: '하정언',
+          mapping: JSON.parse(mapping),
+        },
+      }),
+      {
+        env: {
+          ...envFor(mock),
+          WEBHOOK_WORKTIME_ID: 'wid',
+          WEBHOOK_WORKTIME_TOKEN: 'wtok',
+          DISCORD_USER_IDS: '하정언:996435919865401474,박진규:615060326127239171',
+        },
+        fetchImpl: mock.fetchImpl,
+        discordFetch: async (url, init) => {
+          sent.push({ url, body: JSON.parse(String(init?.body ?? '{}')) });
+          return { ok: true, status: 200, text: async () => '' } as Response;
+        },
+        sleep: async () => {},
+      },
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as { notice: unknown }).notice).toEqual({ sent: true });
+    // 알림이 나갔다면 행은 이미 만들어져 있어야 한다 (순서가 뒤집히면 안 된다)
+    expect(mock.pages.at(-1)!.properties['부여시간']).toEqual({ number: 16 });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.body.content).toContain('<@615060326127239171>');
+    expect(sent[0]!.body.content).toContain('16시간');
+    expect(sent[0]!.body.content).toContain('BIC 전시 참가');
+  });
+
+  it('웹훅이 없어도 부여는 성공한다 — 알림은 부가물이다', async () => {
+    const mock = grantMock();
+    const res = await handleApiRequest(
+      req({
+        method: 'POST',
+        path: '/notion/grants',
+        body: {
+          employee: '박진규',
+          dateKey: '2026-08-13',
+          hours: 8,
+          reason: '집안 사정',
+          mapping: JSON.parse(mapping),
+        },
+      }),
+      { env: envFor(mock), fetchImpl: mock.fetchImpl, sleep: async () => {} },
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as { notice: unknown }).notice).toEqual({
+      sent: false,
+      reason: 'not_configured',
+    });
+    expect(mock.pages.at(-1)!.properties['부여시간']).toEqual({ number: 8 });
+  });
+
+  it('디스코드가 죽어 있어도 부여는 되돌리지 않는다', async () => {
+    const mock = grantMock();
+    const res = await handleApiRequest(
+      req({
+        method: 'POST',
+        path: '/notion/grants',
+        body: {
+          employee: '박진규',
+          dateKey: '2026-08-13',
+          hours: 8,
+          reason: '집안 사정',
+          mapping: JSON.parse(mapping),
+        },
+      }),
+      {
+        env: { ...envFor(mock), WEBHOOK_WORKTIME_ID: 'wid', WEBHOOK_WORKTIME_TOKEN: 'wtok' },
+        fetchImpl: mock.fetchImpl,
+        discordFetch: async () => {
+          throw new Error('fetch failed');
+        },
+        sleep: async () => {},
+      },
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as { notice: { sent: boolean } }).notice.sent).toBe(false);
+    expect(mock.pages.at(-1)!.properties['부여시간']).toEqual({ number: 8 });
+  });
+
   it('사유가 없으면 거부한다 — 나중에 근거를 확인할 수 없기 때문', async () => {
     const mock = grantMock();
     const res = await handleApiRequest(

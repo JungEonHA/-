@@ -25,6 +25,7 @@ import {
   type FetchLike,
   type LogicalField,
 } from './_notion.js';
+import { notifyGrant } from './_discord.js';
 
 export interface ServerEnv {
   NOTION_TOKEN?: string;
@@ -35,6 +36,14 @@ export interface ServerEnv {
   ALLOWED_ORIGINS?: string;
   /** Vercel 이 배포마다 넣어 주는 커밋 해시. /health 가 앞 8자만 돌려준다. */
   VERCEL_GIT_COMMIT_SHA?: string;
+  /**
+   * 디스코드 `⏰-근무현황` 채널 웹훅 (discord-os 의 `npm run worktime:setup` 산출물).
+   * 없으면 특별 휴가 부여는 그대로 되고 알림만 조용히 생략된다.
+   */
+  WEBHOOK_WORKTIME_ID?: string;
+  WEBHOOK_WORKTIME_TOKEN?: string;
+  /** 멘션용 이름→id 표. `하정언:996...,박진규:615...` */
+  DISCORD_USER_IDS?: string;
 }
 
 export interface ApiRequest {
@@ -55,6 +64,11 @@ export interface ApiResponse {
 export interface RouterDeps {
   env: ServerEnv;
   fetchImpl?: FetchLike;
+  /**
+   * 디스코드 웹훅 호출용. `fetchImpl` 과 나눠 둔 이유는 테스트다 — 그쪽은 Notion 을
+   * 흉내 내는 목이라, 디스코드 요청까지 같은 목으로 보내면 서로의 호출이 섞인다.
+   */
+  discordFetch?: FetchLike;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -320,7 +334,24 @@ export async function handleApiRequest(req: ApiRequest, deps: RouterDeps): Promi
         hours,
         reason,
       });
-      return json(200, result, cors);
+
+      // 디스코드 알림은 부여가 노션에 실제로 쓰인 **뒤에만** 보낸다. 순서를 바꾸면
+      // 노션 쓰기가 실패한 날에도 "휴가 받았다"는 알림만 울린다.
+      //
+      // 실패해도 부여는 성공으로 돌려준다 — 휴가의 존재를 정하는 것은 노션 행이고,
+      // 알림은 부가물이다. 대신 결과를 함께 실어 화면이 "알림은 못 갔다"를 말할 수 있게 한다.
+      const notice = await notifyGrant(
+        env,
+        {
+          employeeName: req.body?.employee ?? null,
+          dateKey,
+          hours,
+          reason,
+          grantedBy: req.body?.grantedBy ?? null,
+        },
+        deps.discordFetch,
+      );
+      return json(200, { ...result, notice }, cors);
     }
 
     if (path === '/notion/grants/revoke' && req.method === 'POST') {

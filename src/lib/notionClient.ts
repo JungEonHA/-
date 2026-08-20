@@ -219,16 +219,29 @@ export function addGrant(
     hours: number;
     reason: string;
     mapping: Partial<Record<LogicalFieldKey, string>>;
+    /** 부여한 사람. 디스코드 알림 문구에만 쓴다. */
+    grantedBy?: string | null;
   },
-): Promise<{ grant: VacationGrant }> {
-  return call<{ grant: VacationGrant }>(config, 'POST', '/notion-grants', {
-    employee: args.employeeName,
-    dateKey: args.dateKey,
-    hours: args.hours,
-    reason: args.reason,
-    mapping: args.mapping,
-  });
+): Promise<{ grant: VacationGrant; notice?: GrantNoticeResult }> {
+  return call<{ grant: VacationGrant; notice?: GrantNoticeResult }>(
+    config,
+    'POST',
+    '/notion-grants',
+    {
+      employee: args.employeeName,
+      dateKey: args.dateKey,
+      hours: args.hours,
+      reason: args.reason,
+      mapping: args.mapping,
+      grantedBy: args.grantedBy ?? null,
+    },
+  );
 }
+
+/** 디스코드 근무현황 채널 알림의 결과. 부여 자체의 성패와는 무관하다. */
+export type GrantNoticeResult =
+  | { sent: true }
+  | { sent: false; reason: 'not_configured' | 'failed'; detail?: string };
 
 /** 부여를 되돌린다 (Notion 휴지통). */
 export function revokeGrant(config: ClientConfig, id: string): Promise<{ ok: true }> {

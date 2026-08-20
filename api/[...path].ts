@@ -51,6 +51,9 @@ export default async function handler(req: NodeLikeRequest, res: NodeLikeRespons
       APP_ACCESS_KEY: process.env.APP_ACCESS_KEY,
       ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
       VERCEL_GIT_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA,
+      WEBHOOK_WORKTIME_ID: process.env.WEBHOOK_WORKTIME_ID,
+      WEBHOOK_WORKTIME_TOKEN: process.env.WEBHOOK_WORKTIME_TOKEN,
+      DISCORD_USER_IDS: process.env.DISCORD_USER_IDS,
     },
   });
 
