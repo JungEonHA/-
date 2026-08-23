@@ -18,3 +18,4 @@ playwright-report/
 scripts/screenshot.mjs
 scripts/notion-doctor.ts
 scripts/verify-deploy-build.mjs
+scripts/setup-discord-env.sh
