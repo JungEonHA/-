@@ -93,6 +93,15 @@ export function serializeDayLog(log: DayLog): string {
     }
   }
 
+  // 타이머 밖에서 일해 더한 시간. 정정과 같은 이유로 XT 는 취소했을 때도 남긴다.
+  if (log.extraAt) head.push(`XT:${Math.max(0, Math.floor(log.extraAt))}`);
+  if (log.extra && log.extra.ms > 0) {
+    head.push(`X:${Math.max(0, Math.floor(log.extra.ms))}`);
+    if (log.extra.reason) {
+      head.push(`XR:${encodeURIComponent(log.extra.reason.slice(0, MAX_REASON_LENGTH))}`);
+    }
+  }
+
   const tail = [...log.events]
     .sort((a, b) => a.at - b.at)
     .map((ev) => `${CODE_BY_TYPE[ev.type]}:${ev.at - base}`);
@@ -122,6 +131,9 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
   let cAt = 0;
   let cReason = '';
   let cSegments: CorrectedSegment[] = [];
+  let xMs = 0;
+  let xAt = 0;
+  let xReason = '';
 
   for (const token of tokens.slice(1)) {
     const sep = token.indexOf(':');
@@ -130,6 +142,14 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
     const rawValue = token.slice(sep + 1);
 
     // 사유는 숫자가 아니므로 숫자 검사보다 먼저 처리한다.
+    if (code === 'XR') {
+      try {
+        xReason = decodeURIComponent(rawValue).slice(0, MAX_REASON_LENGTH);
+      } catch {
+        xReason = '';
+      }
+      continue;
+    }
     if (code === 'CR') {
       try {
         cReason = decodeURIComponent(rawValue).slice(0, MAX_REASON_LENGTH);
@@ -181,6 +201,14 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
       cAt = Math.max(0, value);
       continue;
     }
+    if (code === 'X') {
+      xMs = Math.max(0, value);
+      continue;
+    }
+    if (code === 'XT') {
+      xAt = Math.max(0, value);
+      continue;
+    }
     const type = TYPE_BY_CODE[code];
     if (!type) continue;
     events.push({ type, at: base + value });
@@ -205,6 +233,8 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
     ...(todosAt ? { todosAt } : {}),
     ...(cAt ? { correctionAt: cAt } : {}),
     ...(correction ? { correction } : {}),
+    ...(xAt ? { extraAt: xAt } : {}),
+    ...(xMs > 0 ? { extra: { ms: xMs, reason: xReason } } : {}),
   };
 }
 
@@ -253,6 +283,14 @@ export function mergeDayLogs(a: DayLog | null, b: DayLog | null): DayLog | null 
   const correction = corrWinner.correction;
   const correctionAt = Math.max(aCorrAt, bCorrAt);
 
+  // 추가 시간도 같은 규칙이다. **합치지 않는다** — 양쪽 값을 더하면 한 기기가 두 번
+  // 동기화되기만 해도 시간이 불어난다. 마지막에 손댄 기기의 값이 그날의 값이다.
+  const aExtraAt = a.extraAt ?? 0;
+  const bExtraAt = b.extraAt ?? 0;
+  const extraWinner = bExtraAt > aExtraAt ? b : bExtraAt < aExtraAt ? a : newer;
+  const extra = extraWinner.extra;
+  const extraAt = Math.max(aExtraAt, bExtraAt);
+
   return {
     date: a.date,
     events,
@@ -263,6 +301,8 @@ export function mergeDayLogs(a: DayLog | null, b: DayLog | null): DayLog | null 
     ...(todosAt ? { todosAt } : {}),
     ...(correctionAt ? { correctionAt } : {}),
     ...(correction ? { correction } : {}),
+    ...(extraAt ? { extraAt } : {}),
+    ...(extra ? { extra } : {}),
   };
 }
 
@@ -277,10 +317,22 @@ export function sameDayLog(a: DayLog | null, b: DayLog | null): boolean {
   // 정정만 달라진 경우도 "바뀐 것"이다. 이걸 빼면 다른 기기에서 한 정정을 받아 놓고도
   // 저장하지 않아 이 기기에서는 영영 반영되지 않는다 (취소도 마찬가지다).
   if (!sameCorrection(a, b)) return false;
+  // 추가 시간도 마찬가지다 — 다른 기기에서 얹은 시간을 받아 놓고 저장하지 않으면
+  // 화면에는 영영 안 나타난다.
+  if (!sameExtra(a, b)) return false;
   return a.events.every((ev, i) => {
     const other = b.events[i];
     return !!other && other.type === ev.type && other.at === ev.at;
   });
+}
+
+/** 추가 시간(및 추가 취소)이 같은 상태인지 */
+function sameExtra(a: DayLog, b: DayLog): boolean {
+  if ((a.extraAt ?? 0) !== (b.extraAt ?? 0)) return false;
+  const x = a.extra;
+  const y = b.extra;
+  if (!x || !y) return !x && !y;
+  return x.ms === y.ms && x.reason === y.reason;
 }
 
 /** 정정(및 정정 취소)이 같은 상태인지 */

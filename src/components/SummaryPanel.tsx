@@ -90,6 +90,10 @@ export function SummaryPanel({ now }: { now: number }) {
   const [fixDate, setFixDate] = useState(() => toDateKey(now));
   const [fixHours, setFixHours] = useState('8');
   const [fixReason, setFixReason] = useState('');
+
+  const [addDate, setAddDate] = useState(() => toDateKey(now));
+  const [addHours, setAddHours] = useState('1');
+  const [addReason, setAddReason] = useState('');
   // 기록이 있으면 구간을 잘라 정정하고, 없으면 시간을 직접 적는다.
   const [fixMode, setFixMode] = useState<'segments' | 'hours'>('segments');
   // 손대기 전에는 초안을 들고 있지 않는다 (date 가 안 맞으면 기록에서 다시 만든다).
@@ -112,6 +116,9 @@ export function SummaryPanel({ now }: { now: number }) {
   // 정정하려는 날의 현재 값 — 무엇을 무엇으로 바꾸는지 미리 보여 준다.
   const fixLog = state.logs[fixDate] ?? null;
   const fixTarget = fixLog ? computeDay(fixLog, now) : null;
+  // 정정은 찍힌 구간만 다시 계산한다. 따로 더한 시간은 정정과 무관하게 그 위에 남으므로
+  // 미리보기에서 함께 보여 주지 않으면 "정정했더니 숫자가 더 크다"로 보인다.
+  const fixExtraMs = fixTarget?.extraMs ?? 0;
 
   // 그날 찍혀 있는 근무 구간. 이게 있으면 시간을 암산해 넣을 필요가 없다.
   const recordedSegments = fixLog ? workSegments(fixLog, now) : [];
@@ -127,6 +134,19 @@ export function SummaryPanel({ now }: { now: number }) {
       date: fixDate,
       rows: segRows.map((row, i) => (i === index ? { ...row, ...patch } : row)),
     });
+  // 시간을 더하려는 날의 현재 값 — 얼마에 얼마를 더하는지 보여 준다.
+  const addLog = state.logs[addDate] ?? null;
+  const addTarget = addLog ? computeDay(addLog, now) : null;
+  const addDelta = Number(addHours);
+  const addPreviewMs =
+    (addTarget?.actualMs ?? 0) + (Number.isFinite(addDelta) && addDelta > 0 ? addDelta * HOUR_MS : 0);
+
+  // 더한 시간이 있는 날들. 정정 이력과 같은 이유로 달과 무관하게 최신순으로 모은다.
+  const additions = Object.values(state.logs)
+    .filter((log) => log?.extra && log.extra.ms > 0)
+    .map((log) => ({ date: log.date, totals: computeDay(log, now) }))
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+
   // 날짜를 옮기면 초안은 버린다 — 다른 날의 구간을 그대로 들고 갈 수는 없다.
   const pickFixDate = (dateKey: string) => {
     setFixDate(dateKey);
@@ -370,8 +390,10 @@ export function SummaryPanel({ now }: { now: number }) {
               })}
             </div>
             <div className="field__hint mt8" data-testid="fix-preview">
-              정정 후 실근무 <b>{formatDurationKo(previewMs)}</b>
+              정정 후 실근무 <b>{formatDurationKo(previewMs + fixExtraMs)}</b>
               {fixTarget ? ` (지금은 ${formatDurationKo(fixTarget.actualMs)})` : ''}
+              {/* 정정은 찍힌 구간만 다시 계산한다. 따로 더한 시간은 그 위에 그대로 남는다. */}
+              {fixExtraMs > 0 && ` · 구간 ${formatDurationKo(previewMs)} + 추가 ${formatDurationKo(fixExtraMs)}`}
             </div>
           </>
         ) : (
@@ -390,6 +412,13 @@ export function SummaryPanel({ now }: { now: number }) {
               data-testid="fix-hours"
               onChange={(e) => setFixHours(e.target.value)}
             />
+            {fixExtraMs > 0 && (
+              <span className="field__hint" data-testid="fix-hours-extra">
+                따로 더한 <b>{formatDurationKo(fixExtraMs)}</b>은 여기에 포함하지 마세요. 그 위에
+                그대로 얹혀 실근무는 {formatDurationKo((Number(fixHours) || 0) * HOUR_MS + fixExtraMs)}{' '}
+                가 됩니다.
+              </span>
+            )}
           </div>
         )}
 
@@ -437,6 +466,117 @@ export function SummaryPanel({ now }: { now: number }) {
             </button>
           )}
         </div>
+      </Card>
+
+      <Card title="근무시간 추가" hint="타이머를 안 켜고 일한 시간 더하기">
+        <Banner kind="info">
+          타이머를 켜지 않고 일한 시간을 <b>그날 근무시간에 더합니다.</b> 찍혀 있는 기록은 그대로
+          두고 얹기만 하므로, 근무 중인 날에 더해도 타이머는 계속 흘러갑니다. 잘못 찍힌 시간을{' '}
+          <b>줄이는</b> 것은 위의 <b>근무시간 정정</b>입니다.
+        </Banner>
+
+        <div className="field mt12">
+          <label className="field__label" htmlFor="add-date">
+            날짜
+          </label>
+          <input
+            id="add-date"
+            className="input"
+            type="date"
+            value={addDate}
+            data-testid="add-date"
+            onChange={(e) => e.target.value && setAddDate(e.target.value)}
+          />
+          <span className="field__hint" data-testid="add-current">
+            {addTarget
+              ? `현재 실근무 ${formatDurationKo(addTarget.actualMs)}` +
+                (addTarget.extraMs > 0 ? ` (이미 더한 시간 ${formatDurationKo(addTarget.extraMs)} 포함)` : '')
+              : '이 날짜에는 기록이 없습니다. 더하면 새로 만들어집니다.'}
+          </span>
+        </div>
+
+        <div className="field">
+          <label className="field__label" htmlFor="add-hours">
+            더할 시간
+          </label>
+          <input
+            id="add-hours"
+            className="input"
+            type="number"
+            min="0.5"
+            max="24"
+            step="0.5"
+            value={addHours}
+            data-testid="add-hours"
+            onChange={(e) => setAddHours(e.target.value)}
+          />
+          <span className="field__hint" data-testid="add-preview">
+            더한 뒤 실근무 <b>{formatDurationKo(addPreviewMs)}</b>
+            {addTarget ? ` (지금은 ${formatDurationKo(addTarget.actualMs)})` : ''}
+          </span>
+        </div>
+
+        <div className="field">
+          <label className="field__label" htmlFor="add-reason">
+            추가 사유
+          </label>
+          <input
+            id="add-reason"
+            className="input"
+            type="text"
+            placeholder="예: 노트북으로 작업, 외부 미팅"
+            value={addReason}
+            data-testid="add-reason"
+            onChange={(e) => setAddReason(e.target.value)}
+          />
+        </div>
+
+        <div className="btnRow mt8">
+          <button
+            type="button"
+            className="btn btn--primary"
+            data-testid="btn-add-apply"
+            disabled={!addReason.trim() || !(Number(addHours) > 0)}
+            onClick={() => {
+              if (store.addWorkTime(addDate, Number(addHours), addReason)) setAddReason('');
+            }}
+          >
+            근무시간 추가
+          </button>
+          {addTarget && addTarget.extraMs > 0 && (
+            <button
+              type="button"
+              className="btn btn--ghost"
+              data-testid="btn-add-clear"
+              onClick={() => store.clearAddedWorkTime(addDate)}
+            >
+              추가 취소
+            </button>
+          )}
+        </div>
+
+        {additions.length > 0 && (
+          <div className="list mt12" data-testid="add-history">
+            {additions.map(({ date, totals }) => (
+              <div className="listRow" key={date}>
+                <div className="listRow__main">
+                  <div className="listRow__title">
+                    {date.slice(5)} ({WEEKDAY_LABELS_KO[dayOfWeek(date)]}) · ➕ 추가됨
+                  </div>
+                  <div className="listRow__sub">{totals.extra?.reason || '(사유 없음)'}</div>
+                </div>
+                <div className="listRow__value">+{formatDurationKo(totals.extraMs)}</div>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => store.clearAddedWorkTime(date)}
+                >
+                  취소
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
 
       <Card title="정정 이력" hint={`${corrections.length}건`}>

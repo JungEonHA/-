@@ -1670,3 +1670,106 @@ describe('근무시간 정정 — 찍힌 구간에서 잘라내기', () => {
     expect(sameDayLog(corrected, corrected)).toBe(true);
   });
 });
+
+describe('근무시간 추가 — 타이머 밖에서 일한 시간 얹기', () => {
+  /** DAY 의 "HH:MM" epoch */
+  const hm = (h: number, m = 0) => t(h) + m * MINUTE_MS;
+
+  it('찍힌 시간 위에 더해지고, 여러 번 더하면 누적된다', async () => {
+    const { store, setClockRaw } = await makeReadyStore(mock);
+
+    setClockRaw(hm(9));
+    store.perform('clock_in');
+    setClockRaw(hm(12));
+    store.perform('clock_out'); // 3시간 찍힘
+
+    expect(store.addWorkTime(DAY, 2, '노트북으로 작업', hm(13))).toBe(true);
+    expect(computeDay(store.logFor(DAY), hm(13)).actualMs).toBe(5 * HOUR_MS);
+
+    expect(store.addWorkTime(DAY, 1, '저녁에 추가 작업', hm(20))).toBe(true);
+    const totals = computeDay(store.logFor(DAY), hm(21));
+    expect(totals.actualMs).toBe(6 * HOUR_MS);
+    // 시간은 누계, 사유는 마지막 것 — 이미 정정한 날을 다시 정정할 때와 같은 규칙이다.
+    expect(totals.extraMs).toBe(3 * HOUR_MS);
+    expect(totals.extra?.reason).toBe('저녁에 추가 작업');
+  });
+
+  it('근무 중인 날에 더해도 상태와 타이머는 그대로다', async () => {
+    const { store, setClockRaw } = await makeReadyStore(mock);
+
+    setClockRaw(hm(9));
+    store.perform('clock_in');
+    setClockRaw(hm(10));
+    store.addWorkTime(DAY, 2, '오전 외부 미팅', hm(10));
+
+    const totals = computeDay(store.logFor(DAY), hm(10));
+    expect(totals.status).toBe('working');
+    expect(totals.isLive).toBe(true);
+    expect(totals.actualMs).toBe(3 * HOUR_MS); // 1시간 찍힘 + 2시간 추가
+
+    // 한 시간 더 흐르면 찍힌 쪽만 늘어난다
+    expect(computeDay(store.logFor(DAY), hm(11)).actualMs).toBe(4 * HOUR_MS);
+  });
+
+  it('기록이 없는 날에도 더할 수 있다 (타이머를 아예 안 켠 날)', async () => {
+    const { store } = await makeReadyStore(mock);
+
+    expect(store.addWorkTime(DAY, 3, '종일 외근', hm(20))).toBe(true);
+    expect(computeDay(store.logFor(DAY), hm(21)).actualMs).toBe(3 * HOUR_MS);
+  });
+
+  it('사유 없이, 또는 0 이하로는 더할 수 없다', async () => {
+    const { store } = await makeReadyStore(mock);
+
+    expect(store.addWorkTime(DAY, 2, '   ', hm(10))).toBe(false);
+    expect(store.addWorkTime(DAY, 0, '사유 있음', hm(10))).toBe(false);
+    expect(store.addWorkTime(DAY, -1, '사유 있음', hm(10))).toBe(false);
+    expect(store.logFor(DAY).extra).toBeUndefined();
+  });
+
+  it('하루 24시간을 넘기는 추가는 막는다 (2를 20으로 잘못 친 경우)', async () => {
+    const { store, setClockRaw } = await makeReadyStore(mock);
+
+    setClockRaw(hm(9));
+    store.perform('clock_in');
+    setClockRaw(hm(14));
+    store.perform('clock_out'); // 5시간
+
+    expect(store.addWorkTime(DAY, 20, '오타', hm(15))).toBe(false);
+    expect(store.addWorkTime(DAY, 2, '정상', hm(15))).toBe(true);
+    expect(computeDay(store.logFor(DAY), hm(15)).actualMs).toBe(7 * HOUR_MS);
+  });
+
+  it('추가를 취소하면 원래 값으로 돌아가고, 취소한 사실이 남는다', async () => {
+    const { store, setClockRaw } = await makeReadyStore(mock);
+
+    setClockRaw(hm(9));
+    store.perform('clock_in');
+    setClockRaw(hm(12));
+    store.perform('clock_out');
+    store.addWorkTime(DAY, 2, '노트북 작업', hm(13));
+
+    expect(store.clearAddedWorkTime(DAY, hm(14))).toBe(true);
+    expect(computeDay(store.logFor(DAY), hm(14)).actualMs).toBe(3 * HOUR_MS);
+    expect(store.logFor(DAY).extra).toBeUndefined();
+    // 취소 시각은 남아야 다른 기기의 옛 추가를 이긴다
+    expect(store.logFor(DAY).extraAt).toBe(hm(14));
+  });
+
+  it('새로고침해도 더한 시간이 남는다 (기록이 추가뿐인 날도)', async () => {
+    const kv = memoryStore();
+    const first = await makeReadyStore(mock, kv);
+    first.store.addWorkTime(DAY, 3, '종일 외근', hm(20));
+
+    const second = await makeReadyStore(mock, kv);
+    expect(second.store.logFor(DAY).extra).toEqual({ ms: 3 * HOUR_MS, reason: '종일 외근' });
+    expect(computeDay(second.store.logFor(DAY), hm(21)).actualMs).toBe(3 * HOUR_MS);
+  });
+
+  it('더하면 그날이 Notion 동기화 대기열에 오른다', async () => {
+    const { store } = await makeReadyStore(mock);
+
+    store.addWorkTime(DAY, 2, '노트북 작업', hm(13));
+    expect(Object.keys(store.getSnapshot().state.outbox)).toContain(DAY);
+  });
+});

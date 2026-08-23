@@ -72,6 +72,34 @@ export interface DayLog {
    * 시각도 같이 사라져서 병합 때 다른 기기의 옛 정정이 되살아난다.
    */
   correctionAt?: number;
+  /**
+   * 타이머 밖에서 일한 시간을 더한 것.
+   *
+   * 정정과 무엇이 다른가 — 정정은 **찍혀 있는 기록을 깎는** 일이고(퇴근을 안 찍어
+   * 부풀려진 시간을 실제 구간으로 되돌린다), 이건 **찍히지 않은 시간을 얹는** 일이다
+   * (타이머를 안 켜고 일했다). 방향이 반대라 같은 칸에 담으면 안 된다:
+   *  - 정정은 그날을 "이걸로 마감"으로 보고 타이머를 멈춘다. 추가는 멈추면 안 된다 —
+   *    근무 중인 오늘에 2시간을 얹었다고 타이머가 서 버리면 그게 더 큰 사고다.
+   *  - 둘은 겹쳐 쓸 수 있어야 한다. 구간을 잘라 정정한 날에도 안 찍힌 시간은 있다.
+   *
+   * 여러 번 더하면 시간은 누적되고 사유는 마지막 것으로 바뀐다 — 이미 정정한 날을
+   * 다시 정정할 때와 같은 규칙이다.
+   */
+  extra?: DayExtra;
+  /**
+   * 추가를 마지막으로 손댄 시각. **추가를 취소했을 때도 갱신된다.**
+   * `correctionAt` 과 같은 이유로 `extra` 밖에 둔다 — 취소는 "추가가 없음"이라는
+   * 상태이므로, 시각을 안에 두면 취소한 순간 시각도 사라져 병합에서 되살아난다.
+   */
+  extraAt?: number;
+}
+
+/** 타이머 밖에서 일한 시간 */
+export interface DayExtra {
+  /** 더한 시간 (ms) */
+  ms: number;
+  /** 왜 더했는지 (예: 노트북으로 작업, 외부 미팅) */
+  reason: string;
 }
 
 export interface DayCorrection {
@@ -152,6 +180,10 @@ export interface DayTotals {
   correction: DayCorrection | null;
   /** 정정한 시각 (정정하지 않았으면 null) */
   correctedAt: number | null;
+  /** 타이머 밖에서 일해 더한 시간 (ms). `actualMs` 에 이미 포함돼 있다. */
+  extraMs: number;
+  /** 추가 내역 (더한 적 없으면 null) */
+  extra: DayExtra | null;
 }
 
 /** 세션이 이 시간을 넘게 열려 있으면 "퇴근을 잊었을 가능성" 경고 */
@@ -321,7 +353,15 @@ export function computeDay(log: DayLog, now: number): DayTotals {
     }
   }
 
-  const finalActualMs = corrected ? Math.max(0, correction.actualMs) + postCorrectionActualMs : actualMs;
+  // 타이머 밖에서 일한 시간. 정정과 달리 **얹기만 하고 상태는 건드리지 않는다** —
+  // 근무 중인 오늘에 2시간을 더했다고 타이머가 멈추면 안 된다.
+  const extra = log.extra && log.extra.ms > 0 ? log.extra : null;
+  const extraMs = extra ? Math.max(0, extra.ms) : 0;
+
+  const correctedActualMs = corrected
+    ? Math.max(0, correction.actualMs) + postCorrectionActualMs
+    : actualMs;
+  const finalActualMs = correctedActualMs + extraMs;
   // 정정한 날은 출퇴근 기록 유무와 상관없이 마감된 것으로 본다. 아예 안 찍은 날을
   // 나중에 시간만 채우는 경우가 있는데, 그때 '출근 전'으로 남으면 근무시간은 있는데
   // 상태는 미출근인 모순된 행이 Notion 에 올라간다. 다시 복귀했다면 실제 상태(근무
@@ -354,6 +394,8 @@ export function computeDay(log: DayLog, now: number): DayTotals {
     corrected,
     correction,
     correctedAt: corrected ? (log.correctionAt ?? null) : null,
+    extraMs,
+    extra,
   };
 }
 

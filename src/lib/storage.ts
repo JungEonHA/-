@@ -10,7 +10,7 @@
  */
 
 import type { LogicalField } from '../../shared/fields';
-import type { DayCorrection, DayLog } from './events';
+import type { DayCorrection, DayExtra, DayLog } from './events';
 import type { VacationConfig } from './vacation';
 import type { VacationGrant } from '../../shared/grants';
 import { defaultVacationConfig } from './vacation';
@@ -108,6 +108,14 @@ export interface OutboxEntry {
 }
 
 /** 저장된 정정 값을 검증한다. 하나라도 이상하면 통째로 버린다 — 반쪽짜리 정정은 더 위험하다. */
+/** 타이머 밖에서 더한 시간. 0 이하면 "추가 없음"과 같으므로 버린다. */
+function normalizeExtra(raw: any): DayExtra | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const ms = typeof raw.ms === 'number' && Number.isFinite(raw.ms) ? Math.max(0, raw.ms) : 0;
+  if (ms <= 0) return null;
+  return { ms, reason: typeof raw.reason === 'string' ? raw.reason : '' };
+}
+
 function normalizeCorrection(raw: any): DayCorrection | null {
   if (!raw || typeof raw !== 'object') return null;
   const actualMs = typeof raw.actualMs === 'number' && Number.isFinite(raw.actualMs) ? Math.max(0, raw.actualMs) : null;
@@ -256,7 +264,21 @@ export function normalizeState(raw: unknown, now: number): AppState {
     // 다른 기기의 옛 정정이 되살아난다.
     const correction = normalizeCorrection(v.correction);
     const hasCorrectionMark = typeof v.correctionAt === 'number' && Number.isFinite(v.correctionAt);
-    if (events.length === 0 && vacationMs === 0 && todos === null && !correction && !hasCorrectionMark) continue;
+    // 이벤트가 하나도 없이 "추가 시간"만 있는 날이 있다 — 타이머를 아예 안 켜고 일한 날.
+    // 그 하루를 버리면 새로고침 한 번에 더한 시간이 사라진다.
+    const extra = normalizeExtra(v.extra);
+    const hasExtraMark = typeof v.extraAt === 'number' && Number.isFinite(v.extraAt);
+    if (
+      events.length === 0 &&
+      vacationMs === 0 &&
+      todos === null &&
+      !correction &&
+      !hasCorrectionMark &&
+      !extra &&
+      !hasExtraMark
+    ) {
+      continue;
+    }
     logs[dateKey] = {
       date: dateKey,
       events,
@@ -265,6 +287,8 @@ export function normalizeState(raw: unknown, now: number): AppState {
         ? { correctionAt: Math.max(0, v.correctionAt) }
         : {}),
       ...(correction ? { correction } : {}),
+      ...(hasExtraMark ? { extraAt: Math.max(0, v.extraAt as number) } : {}),
+      ...(extra ? { extra } : {}),
       ...(typeof v.updatedAt === 'number' && Number.isFinite(v.updatedAt)
         ? { updatedAt: Math.max(0, v.updatedAt) }
         : {}),

@@ -469,6 +469,71 @@ export class AppStore {
     return true;
   }
 
+  // -- 근무시간 추가 -----------------------------------------------------
+  //
+  // 정정과 방향이 반대다. 정정은 찍혀 있는 기록을 깎는 일이고, 이건 타이머를 켜지
+  // 않고 일한 시간을 얹는 일이다. 그래서 그날의 상태(근무 중/퇴근)는 건드리지 않는다 —
+  // 근무 중인 오늘에 2시간을 더했다고 타이머가 멈추면 그게 더 큰 사고다.
+
+  /**
+   * 그날 실근무시간에 시간을 더한다.
+   * @param hours 더할 시간 (시간 단위, 0 보다 커야 한다)
+   */
+  addWorkTime(dateKey: string, hours: number, reason: string, now = Date.now()): boolean {
+    if (!Number.isFinite(hours) || hours <= 0) {
+      this.notify('error', '더할 시간을 0보다 크게 입력하세요.');
+      return false;
+    }
+    const text = reason.trim();
+    if (!text) {
+      // 사유 없이 시간만 늘면 나중에 아무도 근거를 확인할 수 없다. 정정과 같은 기준이다.
+      this.notify('error', '추가 사유를 입력하세요.');
+      return false;
+    }
+
+    const log = this.logFor(dateKey);
+    const addedMs = Math.round(hours * 3600000);
+    const nextMs = Math.max(0, log.extra?.ms ?? 0) + addedMs;
+
+    // 하루는 24시간을 넘을 수 없다. 오타(2 → 20)를 여기서 잡지 않으면 월간 집계까지 오염된다.
+    if (computeDay(log, now).actualMs - Math.max(0, log.extra?.ms ?? 0) + nextMs > 24 * 3600000) {
+      this.notify('error', '하루 근무시간이 24시간을 넘을 수 없습니다.');
+      return false;
+    }
+
+    this.setState((s) => ({
+      ...s,
+      logs: {
+        ...s.logs,
+        [dateKey]: { ...log, updatedAt: now, extraAt: now, extra: { ms: nextMs, reason: text } },
+      },
+    }));
+
+    this.notify(
+      'success',
+      `${dateKey} 근무시간에 ${hours}시간을 더했습니다 (추가 누계 ${nextMs / 3600000}시간).`,
+    );
+    this.enqueue(dateKey, { auto: true });
+    return true;
+  }
+
+  /** 더한 시간을 전부 되돌린다. */
+  clearAddedWorkTime(dateKey: string, now = Date.now()): boolean {
+    const log = this.snapshot.state.logs[dateKey];
+    if (!log?.extra) return false;
+
+    this.setState((s) => {
+      // extraAt 은 남긴다 — "이 시각에 취소했다"가 있어야 다른 기기의 옛 추가를 이긴다.
+      const next = { ...log, updatedAt: now, extraAt: now };
+      delete next.extra;
+      return { ...s, logs: { ...s.logs, [dateKey]: next } };
+    });
+
+    this.notify('success', `${dateKey} 추가한 근무시간을 되돌렸습니다.`);
+    this.enqueue(dateKey, { auto: true });
+    return true;
+  }
+
   /** 정정을 취소하고 원래 이벤트 기준 계산으로 되돌린다. */
   clearCorrection(dateKey: string, now = Date.now()): boolean {
     const log = this.snapshot.state.logs[dateKey];
