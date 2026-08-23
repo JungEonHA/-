@@ -20,6 +20,8 @@ export interface HealthInfo {
   notionVersion: string;
   /** 서버에 배포된 커밋 앞 8자. 옛 배포에는 없으므로 선택 필드다. */
   build?: string | null;
+  /** 특별 휴가 부여 알림(디스코드)이 설정돼 있는지. */
+  discordNotify?: boolean;
 }
 
 export interface ApiErrorShape {

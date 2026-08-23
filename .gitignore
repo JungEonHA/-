@@ -12,3 +12,6 @@ blob-report/
 .env
 .env.*
 !.env.example
+# vercel link 산출물 (프로젝트 연결 정보). .env* 규칙은 위에 이미 있고,
+# 그걸 다시 덧붙이면 !.env.example 예외가 무효가 되므로 넣지 않는다.
+.vercel

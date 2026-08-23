@@ -598,6 +598,23 @@ describe('API 라우터', () => {
     expect(res.body).toMatchObject({ build: null });
   });
 
+  it('/health 가 휴가 알림 설정 여부를 알려 준다 (웹훅 값 자체는 내지 않는다)', async () => {
+    const mock = realisticMock();
+    const off = await handleApiRequest(req({ method: 'GET', path: '/health' }), {
+      env: envFor(mock),
+      fetchImpl: mock.fetchImpl,
+    });
+    expect(off.body).toMatchObject({ discordNotify: false });
+
+    const on = await handleApiRequest(req({ method: 'GET', path: '/health' }), {
+      env: { ...envFor(mock), WEBHOOK_WORKTIME_ID: 'wid', WEBHOOK_WORKTIME_TOKEN: 'wtok' },
+      fetchImpl: mock.fetchImpl,
+    });
+    expect(on.body).toMatchObject({ discordNotify: true });
+    // 값은 절대 새어 나가면 안 된다
+    expect(JSON.stringify(on.body)).not.toContain('wtok');
+  });
+
   it('토큰 미설정 시 503 과 안내 메시지', async () => {
     const res = await handleApiRequest(req({ method: 'GET', path: '/notion/schema' }), { env: {} });
     expect(res.status).toBe(503);

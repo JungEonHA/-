@@ -148,6 +148,10 @@ export async function handleApiRequest(req: ApiRequest, deps: RouterDeps): Promi
         // 지금 배포된 코드가 어느 커밋인지. 프론트는 자기 번들에 박힌 값과 비교해
         // "화면이 돌리는 코드가 낡았다"를 스스로 판정한다 (아래 build 필드).
         build: (env.VERCEL_GIT_COMMIT_SHA || '').slice(0, 8) || null,
+        // 휴가 부여 알림이 나갈 준비가 됐는지. 웹훅 값 자체는 절대 내지 않는다 —
+        // 그걸 아는 사람이면 누구나 채널에 글을 쓸 수 있기 때문이다.
+        // 불리언만 있어도 "환경변수를 넣었는데 왜 안 울리지"를 즉시 가른다.
+        discordNotify: Boolean(env.WEBHOOK_WORKTIME_ID && env.WEBHOOK_WORKTIME_TOKEN),
       },
       cors,
     );
