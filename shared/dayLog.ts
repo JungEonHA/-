@@ -100,6 +100,11 @@ export function serializeDayLog(log: DayLog): string {
     if (log.extra.reason) {
       head.push(`XR:${encodeURIComponent(log.extra.reason.slice(0, MAX_REASON_LENGTH))}`);
     }
+    // 더한 근무 구간. 정정 근거 구간(CS)과 같은 형식이다.
+    const xsegs = (log.extra.segments ?? []).filter((seg) => seg.end > seg.start);
+    if (xsegs.length > 0) {
+      head.push(`XS:${xsegs.map((seg) => `${seg.start - base}~${seg.end - base}`).join(',')}`);
+    }
   }
 
   const tail = [...log.events]
@@ -134,6 +139,7 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
   let xMs = 0;
   let xAt = 0;
   let xReason = '';
+  let xSegments: CorrectedSegment[] = [];
 
   for (const token of tokens.slice(1)) {
     const sep = token.indexOf(':');
@@ -160,8 +166,8 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
       continue;
     }
     // 구간 목록도 숫자가 아니다. 깨진 조각은 그 조각만 버린다.
-    if (code === 'CS') {
-      cSegments = rawValue
+    if (code === 'CS' || code === 'XS') {
+      const parsed = rawValue
         .split(',')
         .map((pair) => {
           const [a, b] = pair.split('~');
@@ -171,6 +177,8 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
           return { start: base + start, end: base + end };
         })
         .filter((seg): seg is CorrectedSegment => seg !== null);
+      if (code === 'CS') cSegments = parsed;
+      else xSegments = parsed;
       continue;
     }
 
@@ -234,7 +242,9 @@ export function parseDayLog(dateKey: string, text: string | null | undefined): D
     ...(cAt ? { correctionAt: cAt } : {}),
     ...(correction ? { correction } : {}),
     ...(xAt ? { extraAt: xAt } : {}),
-    ...(xMs > 0 ? { extra: { ms: xMs, reason: xReason } } : {}),
+    ...(xMs > 0
+      ? { extra: { ms: xMs, reason: xReason, ...(xSegments.length > 0 ? { segments: xSegments } : {}) } }
+      : {}),
   };
 }
 
@@ -332,7 +342,11 @@ function sameExtra(a: DayLog, b: DayLog): boolean {
   const x = a.extra;
   const y = b.extra;
   if (!x || !y) return !x && !y;
-  return x.ms === y.ms && x.reason === y.reason;
+  if (x.ms !== y.ms || x.reason !== y.reason) return false;
+  const xs = x.segments ?? [];
+  const ys = y.segments ?? [];
+  if (xs.length !== ys.length) return false;
+  return xs.every((seg, i) => seg.start === ys[i]!.start && seg.end === ys[i]!.end);
 }
 
 /** 정정(및 정정 취소)이 같은 상태인지 */

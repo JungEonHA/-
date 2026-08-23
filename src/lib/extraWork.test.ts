@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeDay, type DayLog } from './events';
+import { computeDay, resolveAddedRange, segmentsTotalMs, subtractSegments, type DayLog } from './events';
 import { mergeDayLogs, parseDayLog, sameDayLog, serializeDayLog } from '../../shared/dayLog';
 import { HOUR_MS, dateKeyToEpoch } from './time';
 
@@ -103,11 +103,19 @@ describe('기기 간 동기화', () => {
       ...workedThreeHours(),
       updatedAt: at(13),
       extraAt: at(13),
-      extra: { ms: 2.5 * HOUR_MS, reason: '외부 미팅 · 이동' },
+      extra: {
+        ms: 2.5 * HOUR_MS,
+        reason: '외부 미팅 · 이동',
+        segments: [{ start: at(13), end: at(15, 30) }],
+      },
     };
     const back = parseDayLog(D, serializeDayLog(log))!;
 
-    expect(back.extra).toEqual({ ms: 2.5 * HOUR_MS, reason: '외부 미팅 · 이동' });
+    expect(back.extra).toEqual({
+      ms: 2.5 * HOUR_MS,
+      reason: '외부 미팅 · 이동',
+      segments: [{ start: at(13), end: at(15, 30) }],
+    });
     expect(back.extraAt).toBe(at(13));
     expect(sameDayLog(log, back)).toBe(true);
   });
@@ -141,5 +149,65 @@ describe('기기 간 동기화', () => {
     const a = workedThreeHours();
     const b: DayLog = { ...a, extraAt: at(13), extra: { ms: HOUR_MS, reason: '추가' } };
     expect(sameDayLog(a, b)).toBe(false);
+  });
+});
+
+describe('구간 해석', () => {
+  it('"11:00~17:00" 은 그날 6시간이다', () => {
+    const r = resolveAddedRange(D, '11:00', '17:00')!;
+    expect(r).toEqual({ start: at(11), end: at(17) });
+    expect(r.end - r.start).toBe(6 * HOUR_MS);
+  });
+
+  it('끝이 앞서면 자정을 넘긴 것으로 본다', () => {
+    const r = resolveAddedRange(D, '22:00', '02:00')!;
+    expect(r.end - r.start).toBe(4 * HOUR_MS);
+    expect(r.end).toBe(at(26)); // 다음날 02:00
+  });
+
+  it('같은 시각은 길이 0이지 24시간이 아니다 (오타가 하루를 만들어 내면 안 된다)', () => {
+    expect(resolveAddedRange(D, '11:00', '11:00')).toBeNull();
+  });
+
+  it('형식이 아니면 null', () => {
+    expect(resolveAddedRange(D, '25:00', '17:00')).toBeNull();
+    expect(resolveAddedRange(D, '11:70', '17:00')).toBeNull();
+    expect(resolveAddedRange(D, '', '17:00')).toBeNull();
+    expect(resolveAddedRange(D, '아침', '저녁')).toBeNull();
+  });
+});
+
+describe('겹치는 구간 빼기', () => {
+  const range = { start: at(11), end: at(17) };
+
+  it('가운데가 겹치면 앞뒤 두 조각이 남는다', () => {
+    const left = subtractSegments(range, [{ start: at(13), end: at(14) }]);
+    expect(left).toEqual([
+      { start: at(11), end: at(13) },
+      { start: at(14), end: at(17) },
+    ]);
+    expect(segmentsTotalMs(left)).toBe(5 * HOUR_MS);
+  });
+
+  it('앞이 겹치면 뒤만 남는다', () => {
+    expect(subtractSegments(range, [{ start: at(9), end: at(12) }])).toEqual([
+      { start: at(12), end: at(17) },
+    ]);
+  });
+
+  it('통째로 덮이면 아무것도 안 남는다', () => {
+    expect(subtractSegments(range, [{ start: at(9), end: at(18) }])).toEqual([]);
+  });
+
+  it('안 겹치면 그대로다', () => {
+    expect(subtractSegments(range, [{ start: at(18), end: at(20) }])).toEqual([range]);
+  });
+
+  it('겹치는 구간이 여러 개여도 순서와 무관하게 맞는다', () => {
+    const busy = [
+      { start: at(15), end: at(16) },
+      { start: at(12), end: at(13) },
+    ];
+    expect(segmentsTotalMs(subtractSegments(range, busy))).toBe(4 * HOUR_MS);
   });
 });

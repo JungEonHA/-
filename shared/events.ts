@@ -96,10 +96,18 @@ export interface DayLog {
 
 /** 타이머 밖에서 일한 시간 */
 export interface DayExtra {
-  /** 더한 시간 (ms) */
+  /** 더한 시간 합계 (ms). `segments` 가 있으면 그 합과 같다. */
   ms: number;
   /** 왜 더했는지 (예: 노트북으로 작업, 외부 미팅) */
   reason: string;
+  /**
+   * 더한 근무 구간. "11:00~17:00 에 일했다"를 그대로 남긴다.
+   *
+   * 정정이 근거 구간(`DayCorrection.segments`)을 남기는 것과 같은 이유다 — 숫자만
+   * 남기면 "왜 6시간인가"가 사라져 나중에 아무도 검증할 수 없고, 여러 번 더했을 때
+   * 어느 것을 되돌려야 하는지도 알 수 없다.
+   */
+  segments?: CorrectedSegment[];
 }
 
 export interface DayCorrection {
@@ -434,6 +442,73 @@ export function clockToEpochWithin(
     }
   }
   return Math.min(segment.end, Math.max(segment.start, best));
+}
+
+/**
+ * "11:00~17:00" 처럼 적은 구간을 그날의 절대시각 구간으로 바꾼다.
+ *
+ * 정정(clockToEpochWithin)과 달리 붙잡을 기록이 없다. 사람이 아는 것은 "그날 11시부터
+ * 5시까지"이므로 그 근무일의 자정을 기준으로 삼고, **끝이 시작보다 앞서면 자정을 넘긴
+ * 것으로 본다** (22:00~02:00). 그래야 새벽까지 이어 일한 날을 두 번 나눠 적지 않는다.
+ *
+ * 형식이 아니거나 길이가 0이면 null — 부르는 쪽이 "아직 못 넣는다"로 다룬다.
+ */
+export function resolveAddedRange(
+  dateKey: string,
+  startHHMM: string,
+  endHHMM: string,
+): CorrectedSegment | null {
+  const at = (hhmm: string): number | null => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+    if (!m) return null;
+    const hour = Number(m[1]);
+    const minute = Number(m[2]);
+    if (hour > 23 || minute > 59) return null;
+    return dateKeyToEpoch(dateKey) + hour * 60 * 60 * 1000 + minute * 60 * 1000;
+  };
+
+  const start = at(startHHMM);
+  const rawEnd = at(endHHMM);
+  if (start === null || rawEnd === null) return null;
+
+  // 같은 시각이면 길이가 0이다. 이걸 "자정을 넘겼다"로 보면 11:00~11:00 이 24시간이
+  // 되어 버린다 — 오타가 하루를 통째로 만들어 내는 최악의 실패다. 넘긴 것으로 보는 건
+  // 끝이 **엄격히 앞설 때**뿐이다.
+  if (rawEnd === start) return null;
+  const end = rawEnd > start ? rawEnd : rawEnd + DAY_MS;
+  return { start, end };
+}
+
+/**
+ * `range` 에서 `busy` 구간들과 겹치는 부분을 잘라내고 남는 조각들.
+ *
+ * 왜 필요한가 — 추가는 "타이머 밖에서 일한 시간"이다. 09:00~12:00 을 이미 찍어 둔
+ * 날에 11:00~17:00 을 더하면 11~12시가 두 번 세어진다. 사람은 그걸 알아채지 못하고
+ * 월간 집계만 조용히 부풀어 오른다. 겹치는 만큼은 애초에 안 더하는 것이 맞다.
+ */
+export function subtractSegments(
+  range: CorrectedSegment,
+  busy: readonly { start: number; end: number }[],
+): CorrectedSegment[] {
+  let pieces: CorrectedSegment[] = [{ ...range }];
+
+  for (const block of [...busy].sort((a, b) => a.start - b.start)) {
+    const next: CorrectedSegment[] = [];
+    for (const piece of pieces) {
+      // 안 겹치면 그대로 둔다
+      if (block.end <= piece.start || block.start >= piece.end) {
+        next.push(piece);
+        continue;
+      }
+      // 앞쪽에 남는 조각
+      if (block.start > piece.start) next.push({ start: piece.start, end: block.start });
+      // 뒤쪽에 남는 조각
+      if (block.end < piece.end) next.push({ start: block.end, end: piece.end });
+    }
+    pieces = next;
+  }
+
+  return pieces.filter((p) => p.end > p.start);
 }
 
 /** 진행 중(미퇴근) 세션이 비정상적으로 길게 열려 있는지 */

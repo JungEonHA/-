@@ -14,7 +14,9 @@ import {
   computeDay,
   emptyDayLog,
   resolveActiveDate,
+  resolveAddedRange,
   segmentsTotalMs,
+  subtractSegments,
   workSegments,
   type ActionKind,
   type CorrectedSegment,
@@ -54,7 +56,7 @@ import {
   type OutboxEntry,
   type StateKeys,
 } from './storage';
-import { toDateKey } from './time';
+import { formatDurationKo, toDateKey } from './time';
 import { MAX_TODOS, MAX_TODO_TEXT, makeTodoId, type TodoItem } from './todos';
 import { planVacationChange, type VacationConfig } from './vacation';
 import { suggestMapping } from '../../shared/fields';
@@ -476,14 +478,21 @@ export class AppStore {
   // 근무 중인 오늘에 2시간을 더했다고 타이머가 멈추면 그게 더 큰 사고다.
 
   /**
-   * 그날 실근무시간에 시간을 더한다.
-   * @param hours 더할 시간 (시간 단위, 0 보다 커야 한다)
+   * 일한 구간을 적어 그날 실근무시간에 더한다.
+   *
+   * 시간을 숫자로 받지 않는 이유는 정정과 같다 — 사람이 아는 것은 "11시부터 5시까지
+   * 일했다"이지 "6시간"이 아니다. 암산을 시키면 틀리고, 숫자만 남기면 나중에 그게
+   * 무슨 시간이었는지 아무도 모른다.
+   *
+   * @param startHHMM "11:00" · @param endHHMM "17:00" (끝이 앞서면 자정을 넘긴 것으로 본다)
    */
-  addWorkTime(dateKey: string, hours: number, reason: string, now = Date.now()): boolean {
-    if (!Number.isFinite(hours) || hours <= 0) {
-      this.notify('error', '더할 시간을 0보다 크게 입력하세요.');
-      return false;
-    }
+  addWorkRange(
+    dateKey: string,
+    startHHMM: string,
+    endHHMM: string,
+    reason: string,
+    now = Date.now(),
+  ): boolean {
     const text = reason.trim();
     if (!text) {
       // 사유 없이 시간만 늘면 나중에 아무도 근거를 확인할 수 없다. 정정과 같은 기준이다.
@@ -491,12 +500,31 @@ export class AppStore {
       return false;
     }
 
-    const log = this.logFor(dateKey);
-    const addedMs = Math.round(hours * 3600000);
-    const nextMs = Math.max(0, log.extra?.ms ?? 0) + addedMs;
+    const range = resolveAddedRange(dateKey, startHHMM, endHHMM);
+    if (!range) {
+      this.notify('error', '일한 시각을 "11:00 ~ 17:00" 처럼 올바르게 입력하세요.');
+      return false;
+    }
 
-    // 하루는 24시간을 넘을 수 없다. 오타(2 → 20)를 여기서 잡지 않으면 월간 집계까지 오염된다.
-    if (computeDay(log, now).actualMs - Math.max(0, log.extra?.ms ?? 0) + nextMs > 24 * 3600000) {
+    const log = this.logFor(dateKey);
+    const existing = log.extra?.segments ?? [];
+
+    // 이미 찍혀 있거나 이미 더한 시간과 겹치는 부분은 빼고 더한다. 그대로 더하면
+    // 같은 시간이 두 번 세어지는데, 사람은 못 알아채고 월간 집계만 조용히 부푼다.
+    const busy = [...workSegments(log, now), ...existing];
+    const pieces = subtractSegments(range, busy);
+    const addedMs = segmentsTotalMs(pieces);
+    if (addedMs <= 0) {
+      this.notify('error', '그 시간은 이미 근무시간에 들어 있습니다.');
+      return false;
+    }
+
+    const segments = [...existing, ...pieces].sort((a, b) => a.start - b.start);
+    const nextMs = segmentsTotalMs(segments);
+
+    // 하루는 24시간을 넘을 수 없다. 여기서 안 막으면 월간 집계까지 오염된다.
+    const withoutExtra = computeDay(log, now).actualMs - Math.max(0, log.extra?.ms ?? 0);
+    if (withoutExtra + nextMs > 24 * 3600000) {
       this.notify('error', '하루 근무시간이 24시간을 넘을 수 없습니다.');
       return false;
     }
@@ -505,14 +533,49 @@ export class AppStore {
       ...s,
       logs: {
         ...s.logs,
-        [dateKey]: { ...log, updatedAt: now, extraAt: now, extra: { ms: nextMs, reason: text } },
+        [dateKey]: {
+          ...log,
+          updatedAt: now,
+          extraAt: now,
+          extra: { ms: nextMs, reason: text, segments },
+        },
       },
     }));
 
+    const clipped = range.end - range.start - addedMs;
     this.notify(
       'success',
-      `${dateKey} 근무시간에 ${hours}시간을 더했습니다 (추가 누계 ${nextMs / 3600000}시간).`,
+      `${dateKey} ${formatDurationKo(addedMs)}을 더했습니다 (추가 누계 ${formatDurationKo(nextMs)}).` +
+        (clipped > 0 ? ` 이미 근무시간인 ${formatDurationKo(clipped)}은 뺐습니다.` : ''),
     );
+    this.enqueue(dateKey, { auto: true });
+    return true;
+  }
+
+  /** 더한 구간 하나만 되돌린다. */
+  removeAddedRange(dateKey: string, index: number, now = Date.now()): boolean {
+    const log = this.snapshot.state.logs[dateKey];
+    const segments = log?.extra?.segments;
+    if (!log || !segments || !segments[index]) return false;
+
+    const rest = segments.filter((_, i) => i !== index);
+    // 마지막 구간을 지우면 추가 자체가 없어진다.
+    if (rest.length === 0) return this.clearAddedWorkTime(dateKey, now);
+
+    this.setState((s) => ({
+      ...s,
+      logs: {
+        ...s.logs,
+        [dateKey]: {
+          ...log,
+          updatedAt: now,
+          extraAt: now,
+          extra: { ...log.extra!, ms: segmentsTotalMs(rest), segments: rest },
+        },
+      },
+    }));
+
+    this.notify('success', `${dateKey} 더한 구간 하나를 되돌렸습니다.`);
     this.enqueue(dateKey, { auto: true });
     return true;
   }

@@ -17,7 +17,9 @@ import {
   STATUS_LABEL_KO,
   clockToEpochWithin,
   computeDay,
+  resolveAddedRange,
   segmentsTotalMs,
+  subtractSegments,
   workSegments,
   type CorrectedSegment,
   type DayCorrection,
@@ -92,7 +94,8 @@ export function SummaryPanel({ now }: { now: number }) {
   const [fixReason, setFixReason] = useState('');
 
   const [addDate, setAddDate] = useState(() => toDateKey(now));
-  const [addHours, setAddHours] = useState('1');
+  const [addStart, setAddStart] = useState('11:00');
+  const [addEnd, setAddEnd] = useState('17:00');
   const [addReason, setAddReason] = useState('');
   // 기록이 있으면 구간을 잘라 정정하고, 없으면 시간을 직접 적는다.
   const [fixMode, setFixMode] = useState<'segments' | 'hours'>('segments');
@@ -137,9 +140,13 @@ export function SummaryPanel({ now }: { now: number }) {
   // 시간을 더하려는 날의 현재 값 — 얼마에 얼마를 더하는지 보여 준다.
   const addLog = state.logs[addDate] ?? null;
   const addTarget = addLog ? computeDay(addLog, now) : null;
-  const addDelta = Number(addHours);
-  const addPreviewMs =
-    (addTarget?.actualMs ?? 0) + (Number.isFinite(addDelta) && addDelta > 0 ? addDelta * HOUR_MS : 0);
+  // 적어 넣은 구간에서 **이미 근무시간인 부분을 뺀** 나머지가 실제로 더해질 시간이다.
+  // 미리보기가 이걸 보여 주지 않으면, 겹친 날에 누른 결과가 입력과 달라 보인다.
+  const addRange = resolveAddedRange(addDate, addStart, addEnd);
+  const addBusy = addLog ? [...workSegments(addLog, now), ...(addLog.extra?.segments ?? [])] : [];
+  const addPieces = addRange ? subtractSegments(addRange, addBusy) : [];
+  const addNetMs = segmentsTotalMs(addPieces);
+  const addClippedMs = addRange ? addRange.end - addRange.start - addNetMs : 0;
 
   // 더한 시간이 있는 날들. 정정 이력과 같은 이유로 달과 무관하게 최신순으로 모은다.
   const additions = Object.values(state.logs)
@@ -496,23 +503,41 @@ export function SummaryPanel({ now }: { now: number }) {
         </div>
 
         <div className="field">
-          <label className="field__label" htmlFor="add-hours">
-            더할 시간
-          </label>
-          <input
-            id="add-hours"
-            className="input"
-            type="number"
-            min="0.5"
-            max="24"
-            step="0.5"
-            value={addHours}
-            data-testid="add-hours"
-            onChange={(e) => setAddHours(e.target.value)}
-          />
+          <span className="field__label">일한 시각</span>
+          <div className="segEdit">
+            <input
+              className="input"
+              type="time"
+              value={addStart}
+              aria-label="추가할 구간 시작"
+              data-testid="add-start"
+              onChange={(e) => setAddStart(e.target.value)}
+            />
+            <span className="segEdit__tilde">~</span>
+            <input
+              className="input"
+              type="time"
+              value={addEnd}
+              aria-label="추가할 구간 종료"
+              data-testid="add-end"
+              onChange={(e) => setAddEnd(e.target.value)}
+            />
+          </div>
           <span className="field__hint" data-testid="add-preview">
-            더한 뒤 실근무 <b>{formatDurationKo(addPreviewMs)}</b>
-            {addTarget ? ` (지금은 ${formatDurationKo(addTarget.actualMs)})` : ''}
+            {addRange === null ? (
+              '시각을 "11:00 ~ 17:00" 처럼 입력하세요. 끝이 앞서면 자정을 넘긴 것으로 봅니다.'
+            ) : addNetMs <= 0 ? (
+              '그 시간은 이미 근무시간에 들어 있습니다.'
+            ) : (
+              <>
+                <b>{formatDurationKo(addNetMs)}</b> 추가 → 실근무{' '}
+                <b>{formatDurationKo((addTarget?.actualMs ?? 0) + addNetMs)}</b>
+                {addTarget ? ` (지금은 ${formatDurationKo(addTarget.actualMs)})` : ''}
+                {/* 겹치는 만큼은 애초에 안 더한다. 말없이 빼면 숫자가 안 맞는 것처럼 보인다. */}
+                {addClippedMs > 0 &&
+                  ` · 이미 근무시간인 ${formatDurationKo(addClippedMs)}은 뺐습니다`}
+              </>
+            )}
           </span>
         </div>
 
@@ -536,9 +561,9 @@ export function SummaryPanel({ now }: { now: number }) {
             type="button"
             className="btn btn--primary"
             data-testid="btn-add-apply"
-            disabled={!addReason.trim() || !(Number(addHours) > 0)}
+            disabled={!addReason.trim() || addNetMs <= 0}
             onClick={() => {
-              if (store.addWorkTime(addDate, Number(addHours), addReason)) setAddReason('');
+              if (store.addWorkRange(addDate, addStart, addEnd, addReason)) setAddReason('');
             }}
           >
             근무시간 추가
@@ -557,21 +582,54 @@ export function SummaryPanel({ now }: { now: number }) {
 
         {additions.length > 0 && (
           <div className="list mt12" data-testid="add-history">
-            {additions.map(({ date, totals }) => (
-              <div className="listRow" key={date}>
+            {additions.map(({ date, totals }) => {
+              const ranges = totals.extra?.segments ?? [];
+              return (
+                <div className="listRow" key={date}>
+                  <div className="listRow__main">
+                    <div className="listRow__title">
+                      {date.slice(5)} ({WEEKDAY_LABELS_KO[dayOfWeek(date)]}) · ➕ 추가됨
+                    </div>
+                    {/* 구간을 그대로 보여 준다 — "6시간"만 남으면 무슨 시간이었는지 알 수 없다. */}
+                    <div className="listRow__sub">
+                      {ranges.length > 0
+                        ? ranges.map((s) => `${formatClock(s.start)}~${formatClock(s.end)}`).join(', ')
+                        : '구간 기록 없음'}
+                      {totals.extra?.reason ? ` · ${totals.extra.reason}` : ''}
+                    </div>
+                  </div>
+                  <div className="listRow__value">+{formatDurationKo(totals.extraMs)}</div>
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => store.clearAddedWorkTime(date)}
+                  >
+                    취소
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* 오늘 고르고 있는 날짜에 여러 구간을 더했으면 하나씩 되돌릴 수 있어야 한다. */}
+        {(addTarget?.extra?.segments?.length ?? 0) > 1 && (
+          <div className="list mt8" data-testid="add-ranges">
+            {addTarget!.extra!.segments!.map((seg, i) => (
+              <div className="listRow" key={`${seg.start}-${i}`}>
                 <div className="listRow__main">
                   <div className="listRow__title">
-                    {date.slice(5)} ({WEEKDAY_LABELS_KO[dayOfWeek(date)]}) · ➕ 추가됨
+                    {formatClock(seg.start)} ~ {formatClock(seg.end)}
                   </div>
-                  <div className="listRow__sub">{totals.extra?.reason || '(사유 없음)'}</div>
                 </div>
-                <div className="listRow__value">+{formatDurationKo(totals.extraMs)}</div>
+                <div className="listRow__value">{formatDurationKo(seg.end - seg.start)}</div>
                 <button
                   type="button"
                   className="btn btn--ghost btn--sm"
-                  onClick={() => store.clearAddedWorkTime(date)}
+                  data-testid={`btn-add-range-remove-${i}`}
+                  onClick={() => store.removeAddedRange(addDate, i)}
                 >
-                  취소
+                  이 구간만 취소
                 </button>
               </div>
             ))}

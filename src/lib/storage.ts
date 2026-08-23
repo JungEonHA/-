@@ -113,7 +113,26 @@ function normalizeExtra(raw: any): DayExtra | null {
   if (!raw || typeof raw !== 'object') return null;
   const ms = typeof raw.ms === 'number' && Number.isFinite(raw.ms) ? Math.max(0, raw.ms) : 0;
   if (ms <= 0) return null;
-  return { ms, reason: typeof raw.reason === 'string' ? raw.reason : '' };
+  // 더한 구간. 형태가 깨진 조각은 그것만 버린다 — 구간이 없어도 합계는 유효하다
+  // (구간 개념이 생기기 전에 저장된 기록이 그렇다).
+  const segments = Array.isArray(raw.segments)
+    ? raw.segments
+        .filter(
+          (seg: any) =>
+            seg &&
+            typeof seg.start === 'number' &&
+            typeof seg.end === 'number' &&
+            Number.isFinite(seg.start) &&
+            Number.isFinite(seg.end) &&
+            seg.end > seg.start,
+        )
+        .map((seg: any) => ({ start: seg.start, end: seg.end }))
+    : [];
+  return {
+    ms,
+    reason: typeof raw.reason === 'string' ? raw.reason : '',
+    ...(segments.length > 0 ? { segments } : {}),
+  };
 }
 
 function normalizeCorrection(raw: any): DayCorrection | null {
