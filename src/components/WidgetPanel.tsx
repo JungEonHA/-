@@ -16,7 +16,7 @@ import { formatClock, formatDateKeyKo, formatDuration, formatDurationKo } from '
 import { MAX_TODO_TEXT, todoSummary } from '../lib/todos';
 import { fullViewUrl } from '../lib/bootParams';
 import { useSnapshot, useStore } from '../hooks/useAppStore';
-import { StatusChip, UpdateBanner } from './ui';
+import { EditableText, StatusChip, UpdateBanner } from './ui';
 
 export function WidgetPanel({ now }: { now: number }) {
   const store = useStore();
@@ -180,7 +180,11 @@ function WidgetActions({ status }: { status: WorkStatus }) {
  *
  * 기본은 접혀 있다. 임베드 블록의 높이는 사용자가 Notion 에서 손으로 맞춰 둔 값이라,
  * 이미 걸어 둔 위젯이 갑자기 길어져 버튼이 잘리면 안 된다. 펼치면 그 자리에서
- * 추가·체크까지 되고, 그대로 그날 근무 기록 행에 저장된다.
+ * 추가·체크·문구 수정까지 되고, 그대로 그날 근무 기록 행에 저장된다.
+ *
+ * 문구 수정은 전체 화면과 같은 규칙을 쓴다(`EditableText`). 여기만 못 고치게 두면
+ * 오타 하나 때문에 지우고 다시 적어야 하는데, 노션에 박아 둔 위젯이 사람들이 실제로
+ * 매일 쓰는 화면이라 그 불편이 전부다.
  */
 function WidgetTodos({ dateKey }: { dateKey: string }) {
   const store = useStore();
@@ -226,7 +230,16 @@ function WidgetTodos({ dateKey }: { dateKey: string }) {
                     aria-label={`${todo.text} 완료 표시`}
                     onChange={() => store.toggleTodo(dateKey, todo.id)}
                   />
-                  <span className="widgetTodo__text">{todo.text}</span>
+                  <EditableText
+                    value={todo.text}
+                    maxLength={MAX_TODO_TEXT}
+                    className="widgetTodo__text"
+                    editClassName="widgetTodo__edit"
+                    editLabel={`${todo.text} 내용 수정`}
+                    testId="widget-todo-text"
+                    editTestId="widget-todo-edit"
+                    onCommit={(next) => store.editTodo(dateKey, todo.id, next)}
+                  />
                   <button
                     type="button"
                     className="widgetTodo__remove"

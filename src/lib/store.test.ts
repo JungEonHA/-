@@ -1272,6 +1272,116 @@ describe('업무 리스트(할 일)', () => {
     expect(store.todosFor(DAY).map((t) => t.text)).toEqual(['하나 고침']);
   });
 
+  /**
+   * 없어진 Property 를 가리키는 매핑.
+   *
+   * `누락 Property 추가` 를 여러 번 눌러 만들어진 `업무 리스트 (2)` 같은 껍데기를
+   * Notion 에서 지우면, 그때 그 이름으로 매핑해 둔 기기는 존재하지 않는 칸을 계속
+   * 가리킨다. 서버는 쓸 곳이 없어 목록을 조용히 버리고, 앱은 초록 배너로
+   * "Notion 에 기록됩니다" 라고 말한다 — 적은 할 일이 어디에도 안 남는다.
+   */
+  it('없어진 Property 를 가리키던 매핑이 스스로 고쳐져 목록이 계속 기록된다', async () => {
+    const kv = memoryStore();
+
+    // 1) `누락 Property 추가` 를 눌러 껍데기 칸(`업무 리스트 (2)`)이 생겼던 시절의 기기.
+    const withShell = new NotionMock({
+      databaseId: DB_ID,
+      title: '근무 기록',
+      properties: {
+        '기록명': { id: 'p1', type: 'title' },
+        '근무 일자': { id: 'p2', type: 'date' },
+        '실 근무시간': { id: 'p5', type: 'number' },
+        '직원': { id: 'p7', type: 'select', options: ['하정언', '박진규'] },
+        '이벤트로그': { id: 'p8', type: 'rich_text' },
+        '업무 리스트': { id: 'p9', type: 'rich_text' },
+        '업무 리스트 (2)': { id: 'p10', type: 'rich_text' },
+      },
+    });
+    installBackend(withShell);
+    const before = await todoStore(withShell, kv);
+    before.store.setMappingField('todos', '업무 리스트 (2)');
+    before.store.addTodo(DAY, '옛날 할 일');
+    await before.store.drainOutbox();
+    expect(withShell.read(withShell.pages[0]!.id)['업무 리스트 (2)']).toBe('☐ 옛날 할 일');
+
+    // 2) 껍데기 칸을 Notion 에서 지웠다. 같은 기기(같은 localStorage)가 다시 열린다.
+    const cleaned = makeTodoMock();
+    installBackend(cleaned);
+    const after = await todoStore(cleaned, kv);
+
+    after.store.addTodo(DAY, '오늘 할 일');
+    await after.store.drainOutbox();
+
+    // 고쳐지지 않으면 서버는 쓸 칸을 못 찾아 목록을 통째로 버린다.
+    expect(after.store.getSnapshot().state.notion.mapping.todos).toBe('업무 리스트');
+    expect(cleaned.pages).toHaveLength(1);
+    expect(cleaned.read(cleaned.pages[0]!.id)['업무 리스트']).toContain('오늘 할 일');
+  });
+
+  it('쓸 수 없는 칸에 매핑돼 목록이 버려지면 조용히 넘어가지 않고 알린다', async () => {
+    const m = new NotionMock({
+      databaseId: DB_ID,
+      title: '근무 기록',
+      properties: {
+        '기록명': { id: 'p1', type: 'title' },
+        '근무 일자': { id: 'p2', type: 'date' },
+        '실 근무시간': { id: 'p5', type: 'number' },
+        '직원': { id: 'p7', type: 'select', options: ['하정언', '박진규'] },
+        '이벤트로그': { id: 'p8', type: 'rich_text' },
+        '업무 리스트': { id: 'p9', type: 'rich_text' },
+      },
+    });
+    installBackend(m);
+    const { store } = await todoStore(m);
+
+    // 텍스트가 아닌 칸을 골라 두면 서버는 쓸 수 없어 목록을 버린다.
+    store.setMappingField('todos', '실 근무시간');
+    store.addTodo(DAY, '어디에도 안 남는 할 일');
+    await store.drainOutbox();
+
+    expect(m.read(m.pages[0]!.id)['업무 리스트'] ?? '').toBe('');
+    expect(store.getSnapshot().runtime.notice?.text).toContain('업무 리스트');
+    expect(store.getSnapshot().runtime.notice?.text).toContain('Property 매핑');
+  });
+
+  it('없어진 Property 를 가리키는 동안에는 초록 배너 대신 경고를 낼 수 있게 알린다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+    const { store } = await todoStore(m);
+
+    store.setMappingField('todos', '업무 리스트 (2)');
+    expect(store.mappedProperty('todos')).toBeNull();
+    expect(store.mappedProperty('eventLog')).toBe('이벤트로그');
+  });
+
+  it('지난 날의 목록을 고치면 오늘이 아니라 그날 행이 바뀐다', async () => {
+    const m = makeTodoMock();
+    installBackend(m);
+    const { store } = await todoStore(m);
+
+    const YESTERDAY = '2026-08-09';
+    store.addTodo(YESTERDAY, '어제 못 적은 것');
+    store.addTodo(DAY, '오늘 것');
+    await store.drainOutbox();
+
+    // 날짜별로 행이 따로 만들어졌는지부터 확인한다 — 한 행에 몰리면
+    // 지난 날 수정이 오늘 기록을 덮어쓰는 셈이 된다.
+    expect(m.pages).toHaveLength(2);
+    const rowOf = (dateKey: string) =>
+      m.pages
+        .map((page) => m.read(page.id))
+        .find((row) => String(row['기록명'] ?? '').startsWith(dateKey))!;
+    expect(rowOf(YESTERDAY)['업무 리스트']).toBe('☐ 어제 못 적은 것');
+
+    store.editTodo(YESTERDAY, store.todosFor(YESTERDAY)[0]!.id, '어제 대본 검토');
+    store.toggleTodo(YESTERDAY, store.todosFor(YESTERDAY)[0]!.id);
+    await store.drainOutbox();
+
+    expect(m.pages).toHaveLength(2);
+    expect(rowOf(YESTERDAY)['업무 리스트']).toBe('☑ 어제 대본 검토');
+    expect(rowOf(DAY)['업무 리스트']).toBe('☐ 오늘 것');
+  });
+
   it('빈 문자열은 추가되지 않고, 하루 개수 상한을 넘지 못한다', async () => {
     const m = makeTodoMock();
     installBackend(m);

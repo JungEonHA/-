@@ -239,6 +239,24 @@ function normalizeName(s: string): string {
  * 서버(스키마 조회 응답)와 클라이언트(캐시된 스키마로 빈 칸 보정)가 같은 규칙을
  * 써야 하므로 여기 공유 모듈에 둔다.
  */
+/**
+ * DB 에 실제로 있는 Property 를 가리키는 항목만 남긴 매핑.
+ *
+ * 매핑은 기기의 localStorage 에 남지만 Property 는 Notion 에서 지워질 수 있다.
+ * 사라진 칸을 가리키는 항목을 그대로 두면 서버가 쓸 곳을 못 찾아 그 값을 조용히
+ * 버린다 — 특히 업무 리스트는 사람이 쓴 문장이라 다시 만들어 낼 수도 없다.
+ * 그래서 스키마를 새로 읽을 때마다 짝 잃은 항목을 떨어내고, 제안값이 그 자리를
+ * 다시 채우게 한다.
+ */
+export function pruneMapping(mapping: FieldMapping, properties: PropertyLike[]): FieldMapping {
+  const names = new Set(properties.map((p) => p.name));
+  const kept: FieldMapping = {};
+  for (const [field, propName] of Object.entries(mapping) as [LogicalField, string][]) {
+    if (propName && names.has(propName)) kept[field] = propName;
+  }
+  return kept;
+}
+
 export function suggestMapping(properties: PropertyLike[]): {
   mapping: FieldMapping;
   unmatched: LogicalField[];

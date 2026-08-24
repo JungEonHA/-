@@ -391,3 +391,77 @@ test.describe('반응형 레이아웃', () => {
     }
   });
 });
+
+test.describe('할 일 목록', () => {
+  test('적어 둔 항목의 문구를 눌러서 고칠 수 있다', async ({ page }) => {
+    await boot(page);
+    await page.getByTestId('tab-todo').click();
+
+    await page.getByTestId('todo-input').fill('3화 대본 초고');
+    await page.getByTestId('todo-add').click();
+    await expect(page.getByTestId('todo-count')).toHaveText('0/1 완료');
+
+    await page.getByTestId('todo-text').first().click();
+    await page.getByTestId('todo-edit').fill('3화 대본 퇴고');
+    await page.getByTestId('todo-edit').press('Enter');
+
+    await expect(page.getByTestId('todo-list')).toContainText('3화 대본 퇴고');
+    await expect(page.getByTestId('todo-list')).not.toContainText('초고');
+
+    // 새로고침해도 고친 문구가 남는다
+    await page.reload();
+    await page.getByTestId('tab-todo').click();
+    await expect(page.getByTestId('todo-list')).toContainText('3화 대본 퇴고');
+  });
+
+  test('날짜를 옮기면 그날 목록만 보이고 따로 저장된다', async ({ page }) => {
+    await boot(page);
+    await page.getByTestId('tab-todo').click();
+
+    await page.getByTestId('todo-input').fill('오늘 것');
+    await page.getByTestId('todo-add').click();
+
+    await page.getByTestId('todo-date').fill('2026-08-07');
+    await expect(page.getByTestId('todo-count')).toHaveText('0개');
+    await expect(page.getByTestId('todo-date-hint')).toContainText('근무 기록이 없습니다');
+
+    await page.getByTestId('todo-input').fill('그날 못 적은 것');
+    await page.getByTestId('todo-add').click();
+    await expect(page.getByTestId('todo-list')).toContainText('그날 못 적은 것');
+    await expect(page.getByTestId('todo-list')).not.toContainText('오늘 것');
+
+    // 오늘로 돌아오면 오늘 목록 그대로다
+    await page.getByTestId('todo-date-today').click();
+    await expect(page.getByTestId('todo-list')).toContainText('오늘 것');
+    await expect(page.getByTestId('todo-list')).not.toContainText('그날 못 적은 것');
+    await expect(page.getByTestId('todo-date')).toHaveValue('2026-08-10');
+  });
+
+  test('앞으로 올 날짜는 고를 수 없다', async ({ page }) => {
+    await boot(page);
+    await page.getByTestId('tab-todo').click();
+    await expect(page.getByTestId('todo-date')).toHaveAttribute('max', '2026-08-10');
+  });
+
+  test('위젯에서도 문구를 그 자리에서 고칠 수 있다', async ({ page }) => {
+    await boot(page);
+    await page.getByTestId('tab-todo').click();
+    await page.getByTestId('todo-input').fill('썸네일 시안');
+    await page.getByTestId('todo-add').click();
+
+    // 백엔드가 없는 e2e 에서는 위젯이 최초 설정 화면부터 띄운다.
+    await page.goto('/?widget=1');
+    await page.getByRole('button', { name: '타이머만 먼저 쓰기' }).click();
+    await page.getByTestId('widget-todo-toggle').click();
+    await expect(page.getByTestId('widget-todo-list')).toContainText('썸네일 시안');
+
+    await page.getByTestId('widget-todo-text').first().click();
+    const edit = page.getByTestId('widget-todo-edit');
+    await expect(edit).toHaveValue('썸네일 시안');
+    await edit.fill('썸네일 최종');
+    await edit.press('Enter');
+
+    await expect(page.getByTestId('widget-todo-list')).toContainText('썸네일 최종');
+    await expect(page.getByTestId('widget-todo-list')).not.toContainText('시안');
+  });
+});

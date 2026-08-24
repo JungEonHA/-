@@ -1,9 +1,13 @@
 /**
- * 오늘 할 일(업무 리스트) 탭.
+ * 할 일(업무 리스트) 탭.
  *
  * 이 목록은 근무 기록과 같은 하루(=같은 Notion 행)에 붙는다. 자정을 넘겨 일하는
  * 중이면 여전히 출근한 날짜에 적힌다 — 근무시간과 같은 기준이어야 나중에 행을 볼 때
  * "이 시간에 무엇을 했는지"가 어긋나지 않는다.
+ *
+ * 날짜는 고를 수 있다. 그날 안에 적어 두지 못한 목록을 나중에 채워 넣거나 문구를
+ * 고치는 일이 실제로 생기는데, 오늘 칸만 열려 있으면 지난 행은 영영 손댈 수 없다.
+ * 고르지 않은 동안에는 언제나 '지금 근무 중인 날'을 따라간다.
  *
  * 저장은 언제나 로컬이 먼저다. Notion 기록이 실패해도 적어 둔 내용은 남고,
  * 대기열에서 자동으로 다시 시도한다.
@@ -13,15 +17,22 @@ import { useState } from 'react';
 import { useSnapshot, useStore } from '../hooks/useAppStore';
 import { MAX_TODOS, MAX_TODO_TEXT, todoSummary, type TodoItem } from '../lib/todos';
 import { formatDateKeyKo, toDateKey } from '../lib/time';
-import { Banner, Card, EmptyState } from './ui';
+import { Banner, Card, EditableText, EmptyState } from './ui';
 
 export function TodoPanel({ now }: { now: number }) {
   const store = useStore();
   const { state } = useSnapshot();
 
-  const dateKey = store.activeDate;
+  const activeDate = store.activeDate;
+  // null 이면 "오늘을 따라간다". 자정을 넘겨 근무일이 바뀌어도 손대지 않은 화면이
+  // 어제에 멈춰 있지 않도록, 고른 날짜를 저장하지 별도로 복사해 두지 않는다.
+  const [picked, setPicked] = useState<string | null>(null);
+  const dateKey = picked ?? activeDate;
+  const isActiveDay = dateKey === activeDate;
+
   const todos = store.todosFor(dateKey);
   const { done, total } = todoSummary(todos);
+  const hasRecord = !!state.logs[dateKey];
 
   const [draft, setDraft] = useState('');
 
@@ -29,20 +40,61 @@ export function TodoPanel({ now }: { now: number }) {
     if (store.addTodo(dateKey, draft)) setDraft('');
   }
 
+  // 앞날의 근무 기록 행을 새로 만들 이유는 없다. 다만 자정을 넘긴 근무 때문에
+  // 활성 날짜가 오늘보다 앞설 수 있으니 그때는 그쪽을 상한으로 둔다.
+  const maxDate = activeDate > toDateKey(now) ? activeDate : toDateKey(now);
+
   return (
     <div className="stack">
       <NotionLinkBanner />
 
       <Card
-        title="오늘 할 일"
-        hint={`${formatDateKeyKo(dateKey)}${dateKey !== toDateKey(now) ? ' (자정을 넘긴 근무)' : ''}`}
+        title={isActiveDay ? '오늘 할 일' : '지난 날 할 일'}
+        hint={
+          isActiveDay && activeDate !== toDateKey(now)
+            ? `${formatDateKeyKo(dateKey)} (자정을 넘긴 근무)`
+            : formatDateKeyKo(dateKey)
+        }
         action={
           <span className="todo__count" data-testid="todo-count">
             {total === 0 ? '0개' : `${done}/${total} 완료`}
           </span>
         }
       >
-        <div className="todo__add">
+        <div className="field">
+          <label className="field__label" htmlFor="todo-date">
+            날짜
+          </label>
+          <div className="todo__date">
+            <input
+              id="todo-date"
+              className="input"
+              type="date"
+              value={dateKey}
+              max={maxDate}
+              data-testid="todo-date"
+              onChange={(e) => e.target.value && setPicked(e.target.value)}
+            />
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              data-testid="todo-date-today"
+              disabled={isActiveDay}
+              onClick={() => setPicked(null)}
+            >
+              오늘로
+            </button>
+          </div>
+          <span className="field__hint" data-testid="todo-date-hint">
+            {isActiveDay
+              ? '지난 날짜를 고르면 그날 목록을 그대로 고칠 수 있습니다.'
+              : hasRecord
+                ? '지난 날의 목록입니다. 고치면 그날 근무 기록 행에 다시 기록됩니다.'
+                : '이 날짜에는 근무 기록이 없습니다. 할 일을 적으면 행이 새로 만들어집니다.'}
+          </span>
+        </div>
+
+        <div className="todo__add mt12">
           <input
             className="input"
             data-testid="todo-input"
@@ -76,8 +128,8 @@ export function TodoPanel({ now }: { now: number }) {
 
         {total === 0 ? (
           <EmptyState>
-            아직 적은 할 일이 없습니다. 위에 입력하고 Enter를 누르면 오늘 근무 기록 행에 함께
-            저장됩니다.
+            아직 적은 할 일이 없습니다. 위에 입력하고 Enter를 누르면{' '}
+            {isActiveDay ? '오늘' : formatDateKeyKo(dateKey)} 근무 기록 행에 함께 저장됩니다.
           </EmptyState>
         ) : (
           <ul className="todo__list" data-testid="todo-list">
@@ -94,9 +146,9 @@ export function TodoPanel({ now }: { now: number }) {
         )}
 
         <p className="field__hint mt12">
-          체크·수정·삭제는 즉시 Notion의 그날 행에 반영됩니다(하루 최대 {MAX_TODOS}개). 앱에서 모두
-          지우면 Notion 칸도 비워집니다 — Notion에서 직접 고친 내용은 다음 동기화 때 앱의 목록으로
-          덮어써집니다.
+          항목을 눌러 문구를 고칠 수 있고, 체크·수정·삭제는 즉시 Notion의 그날 행에 반영됩니다
+          (하루 최대 {MAX_TODOS}개). 앱에서 모두 지우면 Notion 칸도 비워집니다 — Notion에서 직접
+          고친 내용은 다음 동기화 때 앱의 목록으로 덮어써집니다.
         </p>
       </Card>
 
@@ -122,13 +174,6 @@ function TodoRow({
   last: boolean;
 }) {
   const store = useStore();
-  const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(todo.text);
-
-  function commit() {
-    store.editTodo(dateKey, todo.id, text);
-    setEditing(false);
-  }
 
   return (
     <li className={`todo__item ${todo.done ? 'todo__item--done' : ''}`} data-testid="todo-item">
@@ -141,36 +186,16 @@ function TodoRow({
         onChange={() => store.toggleTodo(dateKey, todo.id)}
       />
 
-      {editing ? (
-        <input
-          className="input todo__edit"
-          autoFocus
-          value={text}
-          maxLength={MAX_TODO_TEXT}
-          data-testid="todo-edit"
-          onChange={(e) => setText(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') commit();
-            if (e.key === 'Escape') {
-              setText(todo.text);
-              setEditing(false);
-            }
-          }}
-        />
-      ) : (
-        <button
-          type="button"
-          className="todo__text"
-          title="눌러서 수정"
-          onClick={() => {
-            setText(todo.text);
-            setEditing(true);
-          }}
-        >
-          {todo.text}
-        </button>
-      )}
+      <EditableText
+        value={todo.text}
+        maxLength={MAX_TODO_TEXT}
+        className="todo__text"
+        editClassName="todo__edit"
+        editLabel={`${todo.text} 내용 수정`}
+        testId="todo-text"
+        editTestId="todo-edit"
+        onCommit={(next) => store.editTodo(dateKey, todo.id, next)}
+      />
 
       <span className="todo__tools">
         <button
@@ -214,12 +239,17 @@ function TodoRow({
 function NotionLinkBanner() {
   const store = useStore();
   const { state, runtime } = useSnapshot();
-  const { mapping, schema } = state.notion;
+  const { schema } = state.notion;
 
-  if (mapping.todos) {
+  // `mapping.todos` 가 아니라 **실제로 쓸 수 있는 칸**을 본다. 이름만 남고 칸은
+  // 없어진 매핑에도 초록 배너를 띄우던 탓에, 목록이 통째로 버려지는 동안에도
+  // 화면은 "기록됩니다" 라고 말하고 있었다.
+  const todosProp = store.mappedProperty('todos');
+
+  if (todosProp) {
     return (
       <Banner kind="success">
-        적은 목록은 Notion “{mapping.todos}” 칸에 ☑/☐ 체크리스트로 자동 기록됩니다.
+        적은 목록은 Notion “{todosProp}” 칸에 ☑/☐ 체크리스트로 자동 기록됩니다.
       </Banner>
     );
   }

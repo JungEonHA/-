@@ -867,6 +867,10 @@ button { font-family: inherit; }
 
 .todo__edit { flex: 1; min-width: 0; padding: 6px 9px; font-size: 14px; }
 
+.todo__date { display: flex; align-items: center; gap: 8px; }
+.todo__date .input { flex: 1; min-width: 0; }
+.todo__date .btn { flex: none; }
+
 .todo__tools { display: flex; gap: 2px; flex: none; }
 .todo__tools .btn { padding: 5px 8px; }
 .todo__tools .btn:disabled { opacity: 0.3; }
@@ -903,15 +907,32 @@ button { font-family: inherit; }
 }
 
 .widgetTodo__item { display: flex; align-items: center; gap: 7px; padding: 3px 0; }
-.widgetTodo__item input { width: 14px; height: 14px; flex: none; accent-color: var(--primary); }
+/* 체크박스만 겨냥한다 — `input` 전체를 잡으면 문구 수정 입력칸까지 14px 로 쪼그라든다. */
+.widgetTodo__item input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  accent-color: var(--primary);
+}
 
+/* 눌러서 그 자리에서 고치는 문구라 버튼이지만, 보기에는 그냥 글씨여야 한다. */
 .widgetTodo__text {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
   flex: 1;
   min-width: 0;
+  text-align: left;
+  font: inherit;
   font-size: 12px;
   font-weight: 600;
+  color: var(--text);
+  cursor: text;
   word-break: break-word;
 }
+
+.widgetTodo__edit { flex: 1; min-width: 0; padding: 3px 6px; font-size: 12px; }
 .widgetTodo__item--done .widgetTodo__text {
   color: var(--text-muted);
   text-decoration: line-through;

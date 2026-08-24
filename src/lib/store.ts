@@ -59,7 +59,13 @@ import {
 import { formatDurationKo, toDateKey } from './time';
 import { MAX_TODOS, MAX_TODO_TEXT, makeTodoId, type TodoItem } from './todos';
 import { planVacationChange, type VacationConfig } from './vacation';
-import { suggestMapping } from '../../shared/fields';
+import {
+  FIELD_SPEC_BY_KEY,
+  pruneMapping,
+  suggestMapping,
+  type FieldMapping,
+  type PropertyLike,
+} from '../../shared/fields';
 import { GRANTOR_NAME, canGrantVacation } from '../../shared/grants';
 
 export type BackendStatus = 'checking' | 'ready' | 'unavailable' | 'error';
@@ -125,12 +131,46 @@ function backfillMapping(state: AppState): AppState {
   const props = state.notion.schema?.properties;
   if (!props || props.length === 0) return state;
 
-  const { mapping: suggested } = suggestMapping(props);
-  const merged = { ...suggested, ...state.notion.mapping };
-  const changed = Object.keys(merged).length !== Object.keys(state.notion.mapping).length;
-  if (!changed) return state;
+  const merged = resolveMapping(state.notion.mapping, props);
+  if (sameMapping(merged, state.notion.mapping)) return state;
 
   return { ...state, notion: { ...state.notion, mapping: merged } };
+}
+
+/**
+ * 저장된 매핑 + 스키마 -> 실제로 쓸 수 있는 매핑.
+ *
+ * 사용자가 직접 정한 매핑이 제안값을 이긴다. 단 **그 Property 가 아직 DB 에 있을
+ * 때만** 이긴다. 없어진 칸을 가리키는 항목은 떨어내고 제안값이 그 자리를 채운다 —
+ * 그러지 않으면 서버가 쓸 곳을 못 찾아 값을 조용히 버린다.
+ */
+function resolveMapping(stored: FieldMapping, props: PropertyLike[]): FieldMapping {
+  const { mapping: suggested } = suggestMapping(props);
+  return { ...suggested, ...pruneMapping(stored, props) };
+}
+
+/**
+ * 서버가 "쓸 칸이 없어 버렸다" 고 알려 준 필드를 사람 말로 옮긴다.
+ *
+ * 이 응답을 무시하면 앱은 웃는 얼굴로 값을 잃는다 — 실제로 없어진 Property 를
+ * 가리키는 매핑 때문에 업무 리스트가 통째로 사라지고 있었는데, 화면에는 "기록됩니다"
+ * 라고만 떠 있었다. 매핑이 안 된 필드(사용자가 안 쓰기로 한 칸)는 뺀다.
+ */
+function droppedFieldWarning(
+  skipped: Array<{ field: LogicalFieldKey; reason: string }> | undefined,
+): string | null {
+  // 아예 매핑하지 않은 필드는 사용자가 안 쓰기로 한 것이다 — 그건 사고가 아니다.
+  // 칸을 지정해 놓고도 못 쓴 경우(없어진 칸 / 맞지 않는 타입)만 알린다.
+  const dropped = (skipped ?? []).filter((s) => !s.reason.includes('매핑되지 않음'));
+  if (dropped.length === 0) return null;
+  const names = dropped.map((s) => FIELD_SPEC_BY_KEY[s.field]?.labelKo ?? s.field).join(', ');
+  return `${names} 은(는) 지정한 Notion 칸에 쓸 수 없어 기록되지 않았습니다 (${dropped[0]!.reason}). 설정 › Property 매핑을 확인하세요.`;
+}
+
+function sameMapping(a: FieldMapping, b: FieldMapping): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<LogicalFieldKey>;
+  for (const k of keys) if (a[k] !== b[k]) return false;
+  return true;
 }
 
 export class AppStore {
@@ -143,6 +183,8 @@ export class AppStore {
   private lastBackendCheckAt = 0;
   private outboxSeq = 0;
   private mappingHealAttempted = false;
+  /** 이번 큐 처리에서 무언가 기록되지 못했다는 경고. 다 비운 뒤 한 번만 알린다. */
+  private drainWarning: string | null = null;
 
   private keys: StateKeys;
 
@@ -848,6 +890,21 @@ export class AppStore {
     return true;
   }
 
+  /**
+   * 이 논리 필드가 **실제로 쓸 수 있는** Property 이름. 못 쓰면 null.
+   *
+   * `mapping[field]` 를 그대로 믿으면 안 된다 — 그 이름의 칸이 Notion 에서 지워졌어도
+   * 문자열은 그대로 남아 있어서, 화면은 "기록됩니다" 라고 하고 서버는 값을 버린다.
+   */
+  mappedProperty(field: LogicalFieldKey): string | null {
+    const name = this.snapshot.state.notion.mapping[field];
+    if (!name) return null;
+    const props = this.snapshot.state.notion.schema?.properties;
+    // 스키마를 아직 못 읽었으면 매핑을 의심할 근거가 없다. 저장된 값을 그대로 믿는다.
+    if (!props) return name;
+    return props.some((p) => p.name === name) ? name : null;
+  }
+
   setMappingField(field: LogicalFieldKey, propertyName: string | null) {
     this.setState((s) => {
       const mapping = { ...s.notion.mapping };
@@ -930,7 +987,8 @@ export class AppStore {
    */
   private async healMapping(): Promise<void> {
     if (this.mappingHealAttempted) return;
-    if (this.snapshot.state.notion.mapping.todos) return;
+    // 이름만 남고 칸은 없어진 매핑도 고쳐야 하므로 실재 여부까지 본다.
+    if (this.mappedProperty('todos')) return;
     this.mappingHealAttempted = true;
     try {
       const res = await getSchema(this.clientConfig());
@@ -940,7 +998,8 @@ export class AppStore {
           ...s.notion,
           schema: res.schema,
           // 사용자가 직접 정한 매핑이 우선이고, 비어 있던 칸만 채운다.
-          mapping: { ...res.suggestedMapping, ...s.notion.mapping },
+          // 없어진 Property 를 가리키던 항목은 여기서 떨어져 나간다.
+          mapping: resolveMapping(s.notion.mapping, res.schema.properties),
         },
       }));
     } catch {
@@ -957,7 +1016,8 @@ export class AppStore {
           ...s.notion,
           schema: res.schema,
           // 사용자가 이미 정한 매핑을 우선하고, 비어 있는 필드만 제안값으로 채운다.
-          mapping: { ...res.suggestedMapping, ...s.notion.mapping },
+          // 없어진 Property 를 가리키던 항목은 여기서 떨어져 나간다.
+          mapping: resolveMapping(s.notion.mapping, res.schema.properties),
         },
       }));
       this.notify(
@@ -977,7 +1037,11 @@ export class AppStore {
         notion: {
           ...s.notion,
           schema: res.schema,
-          mapping: { ...s.notion.mapping, ...res.suggestedMapping },
+          // 방금 만든 칸이 이긴다. 나머지는 실재하는 것만 남긴다.
+          mapping: {
+            ...resolveMapping(s.notion.mapping, res.schema.properties),
+            ...res.suggestedMapping,
+          },
         },
       }));
       this.notify(
@@ -1127,6 +1191,7 @@ export class AppStore {
     try {
       let processed = 0;
       let failed = 0;
+      this.drainWarning = null;
 
       for (const entry of this.dueEntries(opts.force === true)) {
         const ok = await this.syncOne(entry);
@@ -1136,7 +1201,10 @@ export class AppStore {
 
       if (processed > 0) {
         this.setState((s) => ({ ...s, lastSyncAt: this.now() }));
-        this.notify('success', `Notion에 ${processed}건 기록했습니다.`);
+        // 무언가 기록되지 못했으면 그 사실이 성공 건수보다 중요하다.
+        // 'error' 로 띄운다 — 동기화 자체는 됐지만 사용자 입장에서는 적은 것이 사라진 일이다.
+        if (this.drainWarning) this.notify('error', this.drainWarning);
+        else this.notify('success', `Notion에 ${processed}건 기록했습니다.`);
       } else if (opts.force && failed === 0) {
         this.notify('info', '동기화할 새 기록이 없습니다.');
       }
@@ -1205,7 +1273,8 @@ export class AppStore {
       // 서버가 다른 기기의 이벤트까지 합쳐 돌려주면 그것을 이 기기의 기록으로 삼는다.
       if (res.mergedLog) this.adoptDayLog(res.mergedLog);
 
-      const warning = res.duplicateWarning ?? res.foreignRowWarning ?? null;
+      const warning =
+        res.duplicateWarning ?? res.foreignRowWarning ?? droppedFieldWarning(res.skipped) ?? null;
       this.setState((s) => {
         const outbox = { ...s.outbox };
         // 보내는 동안 같은 날짜가 또 바뀌었다면(할 일을 연달아 적는 경우가 흔하다)
@@ -1232,7 +1301,9 @@ export class AppStore {
         };
       });
 
-      if (warning) this.notify('info', warning);
+      // 여기서 토스트를 띄우면 곧이어 나오는 "N건 기록했습니다" 가 덮어써 버린다.
+      // 경고는 큐를 다 비운 뒤 마지막에 한 번 알린다.
+      if (warning) this.drainWarning = warning;
       return true;
     } catch (err) {
       const e = err as ApiError;

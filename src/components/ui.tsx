@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { STATUS_LABEL_KO, type WorkStatus } from '../lib/events';
 
 export function Card({
@@ -112,4 +112,82 @@ export function UpdateBanner() {
 
 export function EmptyState({ children }: { children: ReactNode }) {
   return <p className="empty">{children}</p>;
+}
+
+/**
+ * 눌러서 그 자리에서 고치는 한 줄 텍스트.
+ *
+ * 할 일 문구는 전체 화면과 위젯 두 군데에 나온다. 고치는 규칙(Enter 저장 ·
+ * Esc 취소 · 포커스를 잃으면 저장 · 빈 값은 무시)이 한쪽에만 있으면 같은 목록인데
+ * 화면마다 다르게 굴러서, 사용자는 "여기선 되고 저기선 안 된다"를 겪는다.
+ * 그래서 규칙은 이 한 곳에만 둔다.
+ */
+export function EditableText({
+  value,
+  onCommit,
+  maxLength,
+  className = '',
+  editClassName = '',
+  title = '눌러서 수정',
+  editLabel,
+  testId,
+  editTestId,
+}: {
+  value: string;
+  onCommit: (next: string) => void;
+  maxLength?: number;
+  className?: string;
+  editClassName?: string;
+  title?: string;
+  editLabel?: string;
+  testId?: string;
+  editTestId?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  function commit() {
+    onCommit(draft);
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <input
+        className={`input ${editClassName}`}
+        autoFocus
+        value={draft}
+        maxLength={maxLength}
+        aria-label={editLabel}
+        data-testid={editTestId}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit();
+          }
+          if (e.key === 'Escape') {
+            setDraft(value);
+            setEditing(false);
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={className}
+      title={title}
+      data-testid={testId}
+      onClick={() => {
+        setDraft(value);
+        setEditing(true);
+      }}
+    >
+      {value}
+    </button>
+  );
 }
