@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FIELD_SPECS, type LogicalField } from '../../shared/fields';
 import { useSnapshot, useStore } from '../hooks/useAppStore';
-import { HOUR_MS, formatClockSeconds, formatDateKeyKo } from '../lib/time';
+import {
+  HOUR_MS,
+  addMonths,
+  formatClockSeconds,
+  formatDateKeyKo,
+  monthDateKeys,
+  toMonthKey,
+} from '../lib/time';
 import { MAX_AUTO_ATTEMPTS } from '../lib/store';
 import { BUILD_ID } from '../lib/build';
 import { Banner, Card, EmptyState } from './ui';
@@ -185,6 +192,20 @@ export function SettingsPanel() {
             onClick={() => void store.pullDay(store.activeDate, { notify: true })}
           >
             다른 기기 기록 가져오기
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            data-testid="btn-pull-months"
+            disabled={runtime.backend !== 'ready'}
+            onClick={() => {
+              const thisMonth = toMonthKey(Date.now());
+              const start = monthDateKeys(addMonths(thisMonth, -1))[0]!;
+              const end = monthDateKeys(thisMonth).slice(-1)[0]!;
+              void store.pullRange(start, end, { notify: true, force: true });
+            }}
+          >
+            지난 두 달 기록 가져오기
           </button>
         </div>
 

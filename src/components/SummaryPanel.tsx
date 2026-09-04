@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSnapshot, useStore } from '../hooks/useAppStore';
 import { summarizeMonth, summarizeWeek } from '../lib/aggregate';
 import {
@@ -9,6 +9,7 @@ import {
   formatClock,
   formatDurationKo,
   formatMonthKeyKo,
+  monthDateKeys,
   shiftDateKey,
   toDateKey,
   toMonthKey,
@@ -101,6 +102,13 @@ export function SummaryPanel({ now }: { now: number }) {
   const [fixMode, setFixMode] = useState<'segments' | 'hours'>('segments');
   // 손대기 전에는 초안을 들고 있지 않는다 (date 가 안 맞으면 기록에서 다시 만든다).
   const [segDraft, setSegDraft] = useState<{ date: string; rows: SegRow[] }>({ date: '', rows: [] });
+
+  // 다른 달로 넘기면 그 달 기록을 Notion 에서 받아 온다. 이 화면은 원본이 아니라
+  // 사본을 보여 주는 곳이라, 이 기기가 안 찍은 날은 받아오지 않으면 영영 비어 있다.
+  useEffect(() => {
+    const days = monthDateKeys(monthKey);
+    void store.pullRange(days[0]!, days[days.length - 1]!);
+  }, [store, monthKey]);
 
   const week = summarizeWeek(state.logs, now, weekAnchor);
   const month = summarizeMonth(state.logs, now, monthKey);

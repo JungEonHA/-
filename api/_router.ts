@@ -14,6 +14,7 @@ import {
   createGrant,
   fetchDatabaseSchema,
   fetchDayLog,
+  fetchDayLogs,
   fetchGrants,
   normalizeId,
   revokeGrant,
@@ -278,6 +279,33 @@ export async function handleApiRequest(req: ApiRequest, deps: RouterDeps): Promi
         schema,
         mapping: effective,
         dateKey,
+        employeeName: req.query['employee'] ?? null,
+      });
+      return json(200, result, cors);
+    }
+
+    // ---- 한 직원의 기간 기록 읽기 (저장소가 빈 기기에서 지난 기록 복구, 읽기 전용) ----
+    if (path === '/notion/days' && req.method === 'GET') {
+      const from = req.query['from'] ?? '';
+      const to = req.query['to'] ?? '';
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
+        return json(
+          400,
+          { error: 'from=YYYY-MM-DD&to=YYYY-MM-DD 가 필요합니다.', code: 'bad_request', retryable: false },
+          cors,
+        );
+      }
+      const schema = await fetchDatabaseSchema(client, databaseId);
+      const { mapping: suggested } = suggestMapping(schema.properties);
+      const effective: FieldMapping = { ...suggested, ...parseMapping(req.query['mapping']) };
+
+      const result = await fetchDayLogs({
+        client,
+        databaseId,
+        schema,
+        mapping: effective,
+        from,
+        to,
         employeeName: req.query['employee'] ?? null,
       });
       return json(200, result, cors);

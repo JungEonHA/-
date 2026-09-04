@@ -1934,3 +1934,137 @@ describe('근무시간 추가 — 일한 구간을 적으면 알아서 계산한
     expect(Object.keys(store.getSnapshot().state.outbox)).toContain(DAY);
   });
 });
+
+describe('주소로 직접 연 화면 (지난 기록 되살리기)', () => {
+  /** 직원 · 이벤트로그 · 업무 리스트까지 갖춘 DB */
+  function makeFullMock() {
+    return new NotionMock({
+      databaseId: DB_ID,
+      title: '근무 기록',
+      properties: {
+        '기록명': { id: 'p1', type: 'title' },
+        '근무 일자': { id: 'p2', type: 'date' },
+        '출근 시각': { id: 'p3', type: 'rich_text' },
+        '퇴근 시각': { id: 'p4', type: 'rich_text' },
+        '실 근무시간': { id: 'p5', type: 'number' },
+        '상태': { id: 'p6', type: 'select', options: [] },
+        '직원': { id: 'p7', type: 'select', options: ['하정언', '박진규'] },
+        '이벤트로그': { id: 'p8', type: 'rich_text' },
+        '업무 리스트': { id: 'p9', type: 'rich_text' },
+      },
+    });
+  }
+
+  async function device(m: NotionMock, name: string) {
+    const d = await makeReadyStore(m, memoryStore());
+    d.store.setEmployeeName(name);
+    return d;
+  }
+
+  /** 하루를 통째로 찍고 보낸다 */
+  async function workDay(d: Awaited<ReturnType<typeof device>>, dateKey: string) {
+    d.setClock(9, dateKey);
+    d.store.perform('clock_in');
+    d.setClock(18, dateKey);
+    d.store.perform('clock_out');
+    await d.store.drainOutbox();
+  }
+
+  it('저장소가 빈 화면도 지난 기록을 Notion 에서 받아 온다', async () => {
+    const m = makeFullMock();
+    installBackend(m);
+
+    // 노션 위젯 쪽 브라우저에 며칠치가 쌓인다
+    const widget = await device(m, '하정언');
+    await workDay(widget, '2026-08-06');
+    await workDay(widget, '2026-08-07');
+    await workDay(widget, '2026-08-10');
+
+    // 주소로 직접 연 화면은 저장소가 따로라 아무것도 모르는 상태로 시작한다
+    const direct = await device(m, '하정언');
+    expect(Object.keys(direct.store.getSnapshot().state.logs)).toHaveLength(0);
+
+    await direct.store.pullRange('2026-08-01', '2026-08-31');
+
+    const logs = direct.store.getSnapshot().state.logs;
+    expect(Object.keys(logs).sort()).toEqual(['2026-08-06', '2026-08-07', '2026-08-10']);
+    expect(computeDay(direct.store.logFor('2026-08-07'), t(19, '2026-08-07')).actualMs).toBe(
+      9 * HOUR_MS,
+    );
+  });
+
+  it('적어 둔 할 일도 함께 돌아온다', async () => {
+    const m = makeFullMock();
+    installBackend(m);
+
+    const widget = await device(m, '하정언');
+    widget.setClock(9, '2026-08-06');
+    widget.store.addTodo('2026-08-06', '오프닝 콘티');
+    await widget.store.drainOutbox();
+
+    const direct = await device(m, '하정언');
+    await direct.store.pullRange('2026-08-01', '2026-08-31');
+
+    expect(direct.store.todosFor('2026-08-06').map((td) => td.text)).toEqual(['오프닝 콘티']);
+  });
+
+  it('다른 직원의 기록은 가져오지 않는다', async () => {
+    const m = makeFullMock();
+    installBackend(m);
+
+    const park = await device(m, '박진규');
+    await workDay(park, '2026-08-06');
+
+    const ha = await device(m, '하정언');
+    await ha.store.pullRange('2026-08-01', '2026-08-31');
+
+    expect(Object.keys(ha.store.getSnapshot().state.logs)).toHaveLength(0);
+  });
+
+  it('기간 밖의 기록은 가져오지 않는다', async () => {
+    const m = makeFullMock();
+    installBackend(m);
+
+    const widget = await device(m, '하정언');
+    await workDay(widget, '2026-07-30');
+    await workDay(widget, '2026-08-06');
+
+    const direct = await device(m, '하정언');
+    await direct.store.pullRange('2026-08-01', '2026-08-31');
+
+    expect(Object.keys(direct.store.getSnapshot().state.logs)).toEqual(['2026-08-06']);
+  });
+
+  it('방금 받아온 기간 안이면 다시 묻지 않는다', async () => {
+    const m = makeFullMock();
+    installBackend(m);
+    const direct = await device(m, '하정언');
+
+    const queries = () => m.calls.filter((c) => c.path.endsWith('/query')).length;
+
+    await direct.store.pullRange('2026-08-01', '2026-09-30');
+    const after = queries();
+
+    // 집계 탭이 보고 있는 달 — 위에서 받은 두 달 안에 들어 있다
+    await direct.store.pullRange('2026-09-01', '2026-09-30');
+    expect(queries()).toBe(after);
+
+    // 사용자가 더 예전 달로 넘기면 그건 새로 받아야 한다
+    await direct.store.pullRange('2026-07-01', '2026-07-31');
+    expect(queries()).toBeGreaterThan(after);
+  });
+
+  it('로컬에만 있는 기록을 지우지 않는다', async () => {
+    const m = makeFullMock();
+    installBackend(m);
+
+    const direct = await device(m, '하정언');
+    direct.setClock(9, '2026-08-06');
+    direct.store.perform('clock_in');
+
+    // Notion 에는 아직 아무것도 없다 (동기화 전)
+    await direct.store.pullRange('2026-08-01', '2026-08-31');
+
+    expect(direct.store.logFor('2026-08-06').events).toHaveLength(1);
+  });
+});

@@ -1100,3 +1100,67 @@ describe('특별 휴가 부여 API', () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe('기간 조회 (/notion/days)', () => {
+  it('from/to 가 날짜 형식이 아니면 거절한다', async () => {
+    const mock = realisticMock();
+    const res = await handleApiRequest(
+      {
+        method: 'GET',
+        path: '/notion-days',
+        query: { from: '2026-08', to: '2026-08-31' },
+        headers: {},
+        body: {},
+      },
+      { env: envFor(mock), fetchImpl: mock.fetchImpl, sleep: async () => {} },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('시작이 끝보다 뒤면 거절한다', async () => {
+    const mock = realisticMock();
+    const res = await handleApiRequest(
+      {
+        method: 'GET',
+        path: '/notion-days',
+        query: { from: '2026-08-31', to: '2026-08-01' },
+        headers: {},
+        body: {},
+      },
+      { env: envFor(mock), fetchImpl: mock.fetchImpl, sleep: async () => {} },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('앱이 만들지 않은 행은 읽지 않는다', async () => {
+    const mock = realisticMock();
+    // 사람이 손으로 만든 행 — 제목이 소유권 표식과 다르다
+    await mock.fetchImpl('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${mock.token}` },
+      body: JSON.stringify({
+        parent: { database_id: DB_ID },
+        properties: {
+          기록명: { title: [{ text: { content: '8월 정산 메모' } }] },
+          '근무 일자': { date: { start: '2026-08-06' } },
+        },
+      }),
+    });
+
+    expect(mock.pages).toHaveLength(1);
+
+    const res = await handleApiRequest(
+      {
+        method: 'GET',
+        path: '/notion-days',
+        query: { from: '2026-08-01', to: '2026-08-31' },
+        headers: {},
+        body: {},
+      },
+      { env: envFor(mock), fetchImpl: mock.fetchImpl, sleep: async () => {} },
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as any).days).toHaveLength(0);
+  });
+});

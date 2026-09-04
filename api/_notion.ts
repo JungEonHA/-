@@ -664,17 +664,27 @@ export async function fetchDayLog(args: {
     String(cur.created_time ?? '') < String(oldest.created_time ?? '') ? cur : oldest,
   );
 
+  return { found: true, pageId: String(target.id), dayLog: decodeRowLog(dateKey, target, schema, mapping) };
+}
+
+/** 행 하나를 DayLog 로 푼다. 하루 조회와 기간 조회가 같은 규칙을 쓰도록 한곳에 둔다. */
+function decodeRowLog(
+  dateKey: string,
+  page: any,
+  schema: DatabaseSchema,
+  mapping: FieldMapping,
+): DayLog | null {
   const logProp = mapping.eventLog
     ? schema.properties.find((p) => p.name === mapping.eventLog)
     : undefined;
-  const raw = logProp ? target.properties?.[logProp.name] : undefined;
+  const raw = logProp ? page.properties?.[logProp.name] : undefined;
   const dayLog = parseDayLog(dateKey, raw ? plainTextFromRich(raw.rich_text) : '');
 
   const todosProp = mapping.todos
     ? schema.properties.find((p) => p.name === mapping.todos)
     : undefined;
   if (dayLog && todosProp) {
-    const rawTodos = target.properties?.[todosProp.name];
+    const rawTodos = page.properties?.[todosProp.name];
     dayLog.todos = parseTodoText(rawTodos ? plainTextFromRich(rawTodos.rich_text) : '');
   } else if (dayLog?.todosAt) {
     // 목록 칸을 읽을 수 없으면 "누가 마지막으로 고쳤는가"도 알 수 없다. 그 시각만
@@ -683,7 +693,94 @@ export async function fetchDayLog(args: {
     delete dayLog.todosAt;
   }
 
-  return { found: true, pageId: String(target.id), dayLog };
+  return dayLog;
+}
+
+/** 앱이 만든 행의 제목에서 날짜와 이름을 되뽑는다. 형식이 다르면 남의 행이다. */
+export function parseAppRowTitle(title: string): { dateKey: string; employeeName: string | null } | null {
+  const m = /^(\d{4}-\d{2}-\d{2})(?:\s+(.+?))?\s+근무기록$/.exec(title.trim());
+  if (!m) return null;
+  return { dateKey: m[1]!, employeeName: m[2]?.trim() || null };
+}
+
+/** 기간 조회에서 한 번에 훑을 최대 행 수. 100 * 10 = 1000 행이면 몇 달치를 덮는다. */
+const RANGE_MAX_PAGES = 10;
+
+/**
+ * 기간 안의 기록을 한꺼번에 읽어 온다 (쓰기 없음).
+ *
+ * 기록의 원본은 Notion 이고 브라우저 저장소는 사본일 뿐이다. 그런데 하루씩 읽는
+ * 경로밖에 없어서, 저장소가 빈 브라우저(=처음 여는 기기, 노션 위젯과 저장소가
+ * 갈린 전체 화면)에서는 지난 기록이 영영 보이지 않았다. 이 함수가 그 구멍을 메운다.
+ */
+export async function fetchDayLogs(args: {
+  client: NotionClient;
+  databaseId: string;
+  schema: DatabaseSchema;
+  mapping: FieldMapping;
+  from: string;
+  to: string;
+  employeeName: string | null;
+}): Promise<{ days: Array<{ dateKey: string; pageId: string; dayLog: DayLog | null }> }> {
+  const { client, schema, mapping, from, to } = args;
+  const databaseId = normalizeId(args.databaseId);
+  const employeeName = args.employeeName?.trim() || null;
+
+  const dateProp = mapping.date ? schema.properties.find((p) => p.name === mapping.date) : undefined;
+  const employeeProp =
+    mapping.employee && employeeName
+      ? schema.properties.find((p) => p.name === mapping.employee)
+      : undefined;
+
+  const filters: unknown[] = [];
+  // 날짜 Property 가 진짜 date 일 때만 범위를 서버에서 좁힌다. 텍스트로 적힌
+  // 날짜는 범위 비교가 안 되므로 그때는 전부 받아 제목으로 걸러낸다.
+  if (dateProp?.type === 'date') {
+    filters.push({ property: dateProp.name, date: { on_or_after: from } });
+    filters.push({ property: dateProp.name, date: { on_or_before: to } });
+  }
+  if (employeeProp && employeeName) {
+    const f = buildEmployeeFilter(employeeProp, employeeName);
+    if (f) filters.push(f);
+  }
+
+  const best = new Map<string, any>();
+  let cursor: string | undefined;
+  for (let page = 0; page < RANGE_MAX_PAGES; page++) {
+    const query = await client.request<any>('POST', `/databases/${databaseId}/query`, {
+      ...(filters.length > 0 ? { filter: filters.length === 1 ? filters[0] : { and: filters } } : {}),
+      page_size: 100,
+      ...(cursor ? { start_cursor: cursor } : {}),
+    });
+
+    for (const row of query.results ?? []) {
+      if (!row || row.archived === true) continue;
+      const parsed = parseAppRowTitle(pageTitleText(row));
+      if (!parsed) continue; // 앱이 만들지 않은 행 — 건드리지도 읽지도 않는다
+      if (parsed.dateKey < from || parsed.dateKey > to) continue;
+      // 이름이 지정됐으면 그 사람 행만. 제목이 소유권 표식이므로 여기서도 제목을 믿는다.
+      if (employeeName && parsed.employeeName !== employeeName) continue;
+
+      // 같은 날 행이 여럿이면 upsert 와 같은 규칙으로 가장 오래된 것을 고른다.
+      const prev = best.get(parsed.dateKey);
+      if (!prev || String(row.created_time ?? '') < String(prev.created_time ?? '')) {
+        best.set(parsed.dateKey, row);
+      }
+    }
+
+    if (!query.has_more || !query.next_cursor) break;
+    cursor = String(query.next_cursor);
+  }
+
+  const days = [...best.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([dateKey, row]) => ({
+      dateKey,
+      pageId: String(row.id),
+      dayLog: decodeRowLog(dateKey, row, schema, mapping),
+    }));
+
+  return { days };
 }
 
 // ---------------------------------------------------------------------------

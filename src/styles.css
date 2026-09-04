@@ -573,6 +573,17 @@ button { font-family: inherit; }
   cursor: pointer;
 }
 
+/* 배너 문장 안에 끼워 넣는 버튼. 밑줄 링크처럼 보이게 한다. */
+.banner__action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .toast {
   position: fixed;
   left: 50%;
@@ -864,6 +875,25 @@ button { font-family: inherit; }
   word-break: break-word;
 }
 .todo__item--done .todo__text { color: var(--text-muted); text-decoration: line-through; }
+
+/* 랏코가 넣은 줄. 사람이 적은 줄과 한눈에 갈려야 하지만, 자기 목록이 아닌 것처럼
+   흐릿하게 만들면 안 된다 — 마감이 걸린 진짜 할 일이다. 왼쪽 선과 배지로만 가른다. */
+.todo__item--agent {
+  border-left: 2px solid var(--primary);
+  padding-left: 8px;
+  margin-left: -10px;
+}
+.todo__badge {
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  white-space: nowrap;
+}
 
 .todo__edit { flex: 1; min-width: 0; padding: 6px 9px; font-size: 14px; }
 

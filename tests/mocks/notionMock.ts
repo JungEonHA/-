@@ -191,6 +191,14 @@ function matchesFilter(page: MockPage, filter: any): boolean {
   }
   if (filter.number?.equals !== undefined) return raw.number === filter.number.equals;
   if (filter.date?.equals !== undefined) return (raw.date?.start ?? null) === filter.date.equals;
+  if (filter.date?.on_or_after !== undefined) {
+    const start = raw.date?.start ?? null;
+    return start !== null && start >= filter.date.on_or_after;
+  }
+  if (filter.date?.on_or_before !== undefined) {
+    const start = raw.date?.start ?? null;
+    return start !== null && start <= filter.date.on_or_before;
+  }
   if (filter.rich_text?.equals !== undefined) return decode(raw) === filter.rich_text.equals;
   if (filter.title?.equals !== undefined) return decode(raw) === filter.title.equals;
   if (filter.select?.equals !== undefined) return (raw.select?.name ?? null) === filter.select.equals;

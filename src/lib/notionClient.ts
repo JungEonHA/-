@@ -199,6 +199,32 @@ export function getDay(
   return call<DayResponse>(config, 'GET', `/notion-day?${params.toString()}`);
 }
 
+export interface DaysResponse {
+  days: Array<{ dateKey: string; pageId: string; dayLog: DayLog | null }>;
+}
+
+/**
+ * 기간 안의 기록을 한꺼번에 읽어 온다 (쓰기 없음).
+ * 저장소가 빈 기기에서 지난 기록을 되살리는 데 쓴다.
+ */
+export function getDays(
+  config: ClientConfig,
+  args: {
+    from: string;
+    to: string;
+    employeeName: string | null;
+    mapping: Partial<Record<LogicalFieldKey, string>>;
+  },
+): Promise<DaysResponse> {
+  const params = new URLSearchParams({
+    from: args.from,
+    to: args.to,
+    mapping: JSON.stringify(args.mapping),
+  });
+  if (args.employeeName) params.set('employee', args.employeeName);
+  return call<DaysResponse>(config, 'GET', `/notion-days?${params.toString()}`);
+}
+
 /** 그 사람에게 부여된 특별 휴가 목록 (읽기 전용). */
 export function getGrants(
   config: ClientConfig,

@@ -8,8 +8,8 @@ import { SummaryPanel } from './components/SummaryPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { WidgetPanel } from './components/WidgetPanel';
 import { computeDay } from './lib/events';
-import { DAY_MS, formatClockSeconds, toDateKey } from './lib/time';
-import { StatusChip, UpdateBanner } from './components/ui';
+import { DAY_MS, addMonths, formatClockSeconds, monthDateKeys, toDateKey, toMonthKey } from './lib/time';
+import { Banner, StatusChip, UpdateBanner } from './components/ui';
 
 type Tab = 'home' | 'todo' | 'vacation' | 'summary' | 'settings';
 
@@ -47,6 +47,11 @@ export default function App({ widget = false }: { widget?: boolean }) {
   // 연결되지 않은 상태에서 배지를 띄우면 문제가 있는 것처럼 보이므로 감춘다.
   const pendingCount = runtime.backend === 'ready' ? Object.keys(state.outbox).length : 0;
 
+  // 서버가 접근 키를 요구하는데 이 브라우저에는 없는 상태. 이러면 조회가 전부 401 이라
+  // 기록이 하나도 안 뜨는데, 화면에는 아무 설명이 없었다.
+  const needsAccessKey =
+    runtime.backendInfo?.accessKeyRequired === true && state.notion.accessKey.trim() === '';
+
   // 백엔드 존재 여부는 시작 시 한 번 확인한다.
   useEffect(() => {
     void store.checkBackend();
@@ -80,6 +85,25 @@ export default function App({ widget = false }: { widget?: boolean }) {
       window.removeEventListener('focus', pull);
     };
   }, [store]);
+
+  // 전체 화면은 지난 기록까지 Notion 에서 받아 온다.
+  //
+  // 노션 임베드 위젯과 주소로 직접 연 화면은 브라우저가 저장소를 갈라 놓아서
+  // 서로의 기록을 못 본다. 하루치만 읽던 시절에는 그래서 전체 화면이 늘 텅 비어
+  // 보였다 — 기록은 Notion 에 멀쩡히 있는데도.
+  useEffect(() => {
+    if (widget) return;
+    const pullMonths = () => {
+      if (document.visibilityState === 'hidden') return;
+      const thisMonth = toMonthKey(Date.now());
+      const start = monthDateKeys(addMonths(thisMonth, -1))[0]!;
+      const end = monthDateKeys(thisMonth).slice(-1)[0]!;
+      void store.pullRange(start, end);
+    };
+    pullMonths();
+    window.addEventListener('focus', pullMonths);
+    return () => window.removeEventListener('focus', pullMonths);
+  }, [store, widget]);
 
   useEffect(() => {
     if (!widget) return;
@@ -141,6 +165,21 @@ export default function App({ widget = false }: { widget?: boolean }) {
       </header>
 
       {runtime.staleBuild && <UpdateBanner />}
+
+      {/*
+        접근 키가 없으면 서버가 모든 조회를 401 로 막는다. 그 실패는 조용히 넘어가도록
+        돼 있어서(로컬 기록을 잃지 않기 위한 설계), 화면은 그냥 "기록이 없는 앱"처럼
+        보였다 — 노션 위젯 링크에는 키가 실려 있고 주소로 직접 열면 없기 때문에,
+        같은 사람이 같은 날 두 화면에서 전혀 다른 것을 보게 된다.
+      */}
+      {needsAccessKey && (
+        <Banner kind="warn">
+          이 브라우저에는 접근 키가 없어 Notion 기록을 불러오지 못합니다.{' '}
+          <button type="button" className="banner__action" onClick={() => setTab('settings')}>
+            설정 › 연결에서 접근 키 입력
+          </button>
+        </Banner>
+      )}
 
       <nav className="nav" aria-label="주요 메뉴">
         {TABS.map((t) => (

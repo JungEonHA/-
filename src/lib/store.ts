@@ -29,6 +29,7 @@ import {
   addProperties as apiAddProperties,
   addGrant as apiAddGrant,
   getDay,
+  getDays,
   getGrants,
   getHealth,
   getSchema,
@@ -112,6 +113,9 @@ const MAX_BACKOFF_MS = 5 * 60 * 1000;
 const BASE_BACKOFF_MS = 5 * 1000;
 /** 백엔드가 아예 없다고 확인된 뒤의 재확인 간격 */
 const BACKEND_RECHECK_MS = 10 * 60 * 1000;
+
+/** 같은 기간을 다시 긁기 전에 두는 최소 간격 */
+const RANGE_PULL_THROTTLE_MS = 60 * 1000;
 /** 이 횟수를 넘으면 자동 재시도를 멈추고 수동 재시도를 기다린다 (무한 호출 방지) */
 export const MAX_AUTO_ATTEMPTS = 8;
 
@@ -183,6 +187,8 @@ export class AppStore {
   private lastBackendCheckAt = 0;
   private outboxSeq = 0;
   private mappingHealAttempted = false;
+  /** 기간 조회를 방금 한 곳. 탭을 오갈 때마다 같은 달을 다시 긁지 않으려고 기억한다. */
+  private rangePulls: Array<{ who: string; from: string; to: string; at: number }> = [];
   /** 이번 큐 처리에서 무언가 기록되지 못했다는 경고. 다 비운 뒤 한 번만 알린다. */
   private drainWarning: string | null = null;
 
@@ -1138,6 +1144,75 @@ export class AppStore {
     } catch (err) {
       // 읽기 실패는 조용히 넘긴다 — 로컬 기록은 그대로이고 다음 기회에 다시 시도한다.
       if (opts.notify) this.notify('error', `기록을 가져오지 못했습니다: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * 기간 안의 기록을 Notion 에서 받아 로컬에 합친다.
+   *
+   * 브라우저 저장소는 사본일 뿐이고 원본은 Notion 이다. 그런데 예전에는 하루씩 읽는
+   * 경로밖에 없어서, 저장소가 빈 화면에서는 지난 기록과 할 일이 아예 보이지 않았다.
+   * 노션 임베드 위젯과 전체 화면은 브라우저가 저장소를 갈라 놓기 때문에(스토리지
+   * 파티셔닝) 늘 위젯에만 기록이 쌓이고 주소로 직접 연 화면은 텅 비어 있었다.
+   */
+  async pullRange(from: string, to: string, opts: { notify?: boolean; force?: boolean } = {}): Promise<void> {
+    const { mapping, employeeName } = this.snapshot.state.notion;
+    if (!mapping.eventLog) {
+      if (opts.notify) {
+        this.notify('error', '설정 › Property 매핑에서 “기기 연동 로그”를 지정해야 지난 기록을 가져올 수 있습니다.');
+      }
+      return;
+    }
+
+    // 방금 더 넓은 기간을 받아 왔으면 그 안은 다시 묻지 않는다. 홈 화면은 두 달치를,
+    // 집계 탭은 보고 있는 달을 각각 요청하기 때문에 이게 없으면 열 때마다 두 번 긁는다.
+    const who = employeeName.trim();
+    if (!opts.force && !opts.notify) {
+      const fresh = this.now() - RANGE_PULL_THROTTLE_MS;
+      const covered = this.rangePulls.some(
+        (r) => r.who === who && r.at >= fresh && r.from <= from && r.to >= to,
+      );
+      if (covered) return;
+    }
+
+    if (this.backendStatus() !== 'ready') {
+      await this.checkBackend({ force: opts.notify === true });
+      if (this.backendStatus() !== 'ready') return;
+    }
+
+    await this.healMapping();
+
+    try {
+      const res = await getDays(this.clientConfig(), {
+        from,
+        to,
+        employeeName: employeeName.trim() || null,
+        mapping: this.snapshot.state.notion.mapping,
+      });
+      // 최근 것만 남긴다 — 오래된 항목은 어차피 유효기간이 지나 판정에 쓰이지 않는다.
+      this.rangePulls = [
+        ...this.rangePulls.filter((r) => r.at >= this.now() - RANGE_PULL_THROTTLE_MS),
+        { who, from, to, at: this.now() },
+      ];
+
+      const pageIds: Record<string, string> = {};
+      for (const day of res.days) pageIds[day.dateKey] = day.pageId;
+      if (Object.keys(pageIds).length > 0) {
+        this.setState((s) => ({ ...s, notion: { ...s.notion, pageIds: { ...s.notion.pageIds, ...pageIds } } }));
+      }
+
+      let changed = 0;
+      for (const day of res.days) {
+        if (day.dayLog && this.adoptDayLog(day.dayLog)) changed++;
+      }
+      if (opts.notify) {
+        this.notify(
+          changed > 0 ? 'success' : 'info',
+          changed > 0 ? `지난 기록 ${changed}일치를 가져왔습니다.` : '가져올 새 기록이 없습니다.',
+        );
+      }
+    } catch (err) {
+      if (opts.notify) this.notify('error', `지난 기록을 가져오지 못했습니다: ${(err as Error).message}`);
     }
   }
 
