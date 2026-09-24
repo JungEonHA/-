@@ -1008,3 +1008,19 @@ button { font-family: inherit; }
 .mt8 { margin-top: 8px; }
 .mt12 { margin-top: 12px; }
 .mt16 { margin-top: 16px; }
+
+/* ── 할 일이 빈 근무일 (EmptyDays.tsx · 2026-09-25) ───────────────── */
+.emptyDays { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.emptyDays--compact { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 11px; }
+.emptyDays__label b { color: var(--warn); }
+.emptyDays__chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.emptyDays__chip {
+  border: 1px solid var(--border); background: var(--warn-soft); color: var(--warn);
+  border-radius: 999px; padding: 2px 8px; font-size: inherit; cursor: pointer;
+}
+.emptyDays__chip:hover { border-color: var(--warn); }
+.emptyDays__chip--on { background: var(--warn); color: #fff; border-color: var(--warn); }
+.emptyDays__more { color: var(--text-secondary); }
+.widgetTodo__nav { display: flex; align-items: center; gap: 4px; font-size: 12px; }
+.widgetTodo__nav .btn--sm { padding: 2px 8px; }
+.widgetTodo__day { flex: 1; text-align: center; color: var(--text-secondary); }

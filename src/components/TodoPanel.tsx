@@ -18,6 +18,7 @@ import { useSnapshot, useStore } from '../hooks/useAppStore';
 import { MAX_TODOS, MAX_TODO_TEXT, todoSummary, type TodoItem } from '../lib/todos';
 import { formatDateKeyKo, toDateKey } from '../lib/time';
 import { Banner, Card, EditableText, EmptyState } from './ui';
+import { EmptyDays } from './EmptyDays';
 
 export function TodoPanel({ now }: { now: number }) {
   const store = useStore();
@@ -92,6 +93,11 @@ export function TodoPanel({ now }: { now: number }) {
                 ? '지난 날의 목록입니다. 고치면 그날 근무 기록 행에 다시 기록됩니다.'
                 : '이 날짜에는 근무 기록이 없습니다. 할 일을 적으면 행이 새로 만들어집니다.'}
           </span>
+        </div>
+
+        {/* 적는 걸 잊은 날을 찾아 준다 — 할 일이 수익 배분 근거라서 (EmptyDays.tsx) */}
+        <div className="mt8">
+          <EmptyDays now={now} selected={dateKey} onPick={(d) => setPicked(d === activeDate ? null : d)} />
         </div>
 
         <div className="todo__add mt12">

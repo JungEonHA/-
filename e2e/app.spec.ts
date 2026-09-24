@@ -464,4 +464,59 @@ test.describe('할 일 목록', () => {
     await expect(page.getByTestId('widget-todo-list')).toContainText('썸네일 최종');
     await expect(page.getByTestId('widget-todo-list')).not.toContainText('시안');
   });
+
+  // 할 일이 수익 배분 근거가 되면서, 적는 걸 잊은 날을 앱이 찾아 줘야 했다 (2026-09-25).
+  async function workedWithoutTodos(page: Page) {
+    // 8/7(금) 09:00 에 두 시간 일하고, 할 일은 안 적은 채 8/10(월) 로 넘어온다.
+    await page.clock.install({ time: new Date('2026-08-07T00:00:00.000Z') });
+    await page.goto('/');
+    await page.getByTestId('btn-clock-in').click();
+    await page.clock.fastForward('02:00:00');
+    await page.getByTestId('btn-clock-out').click();
+    await page.clock.setSystemTime(START);
+    await page.reload();
+    await expect(page.getByTestId('btn-clock-in')).toBeVisible();
+  }
+
+  test('일했는데 할 일이 빈 날을 알려 주고, 누르면 그날로 가서 채운다', async ({ page }) => {
+    await workedWithoutTodos(page);
+    await page.getByTestId('tab-todo').click();
+
+    await expect(page.getByTestId('empty-days-count')).toHaveText('1일');
+    await page.getByTestId('empty-day').first().click();
+    await expect(page.getByTestId('todo-date')).toHaveValue('2026-08-07');
+
+    await page.getByTestId('todo-input').fill('EP04 각본 초고');
+    await page.getByTestId('todo-add').click();
+    await expect(page.getByTestId('empty-days-none')).toBeVisible();
+  });
+
+  test('위젯에서 지난 날로 넘겨 빈 날을 채우고, 접으면 오늘로 돌아온다', async ({ page }) => {
+    await workedWithoutTodos(page);
+    await page.goto('/?widget=1');
+    await page.getByRole('button', { name: '타이머만 먼저 쓰기' }).click();
+    await page.getByTestId('widget-todo-toggle').click();
+
+    await expect(page.getByTestId('widget-todo-next')).toBeDisabled();
+    await expect(page.getByTestId('empty-days-count')).toHaveText('1일');
+    await page.getByTestId('empty-day').first().click();
+    await expect(page.getByTestId('widget-todo-title')).toContainText('8월 7일');
+
+    await page.getByTestId('widget-todo-input').fill('썸네일 시안');
+    await page.getByTestId('widget-todo-add').click();
+    await expect(page.getByTestId('widget-todo-list')).toContainText('썸네일 시안');
+    await expect(page.getByTestId('empty-days-none')).toBeVisible();
+
+    // ◀ ▶ 로도 넘어간다
+    await page.getByTestId('widget-todo-next').click();
+    await expect(page.getByTestId('widget-todo-title')).toContainText('8월 8일');
+    await page.getByTestId('widget-todo-prev').click();
+    await expect(page.getByTestId('widget-todo-list')).toContainText('썸네일 시안');
+
+    // 접었다 펴면 오늘이다 — 지난 날에 멈춘 채 오늘 할 일을 거기 적지 않도록
+    await page.getByTestId('widget-todo-toggle').click();
+    await page.getByTestId('widget-todo-toggle').click();
+    await expect(page.getByTestId('widget-todo-title')).toHaveText('오늘 할 일');
+    await expect(page.getByTestId('widget-todo-list')).toHaveCount(0);
+  });
 });

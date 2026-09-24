@@ -10,13 +10,14 @@
  * 항상 남겨 둔다. (기록은 어차피 로컬에 먼저 쌓이고 나중에 동기화된다.)
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { computeDay, type WorkStatus } from '../lib/events';
-import { formatClock, formatDateKeyKo, formatDuration, formatDurationKo } from '../lib/time';
+import { formatClock, formatDateKeyKo, formatDuration, formatDurationKo, shiftDateKey } from '../lib/time';
 import { MAX_TODO_TEXT, todoSummary } from '../lib/todos';
 import { fullViewUrl } from '../lib/bootParams';
 import { useSnapshot, useStore } from '../hooks/useAppStore';
 import { EditableText, StatusChip, UpdateBanner } from './ui';
+import { EmptyDays, recentDateKeys } from './EmptyDays';
 
 export function WidgetPanel({ now }: { now: number }) {
   const store = useStore();
@@ -85,7 +86,7 @@ export function WidgetPanel({ now }: { now: number }) {
 
       <WidgetActions status={today.status} />
 
-      <WidgetTodos dateKey={activeDate} />
+      <WidgetTodos activeDate={activeDate} now={now} />
 
       <div className="widget__foot">
         <span data-testid="widget-sync">{syncText(state, runtime, pending)}</span>
@@ -185,12 +186,38 @@ function WidgetActions({ status }: { status: WorkStatus }) {
  * 문구 수정은 전체 화면과 같은 규칙을 쓴다(`EditableText`). 여기만 못 고치게 두면
  * 오타 하나 때문에 지우고 다시 적어야 하는데, 노션에 박아 둔 위젯이 사람들이 실제로
  * 매일 쓰는 화면이라 그 불편이 전부다.
+ *
+ * 지난 날도 여기서 채운다 (CEO 2026-09-25). 할 일이 수익 배분 근거가 되면서 적는 걸 잊은 날을
+ * 나중에 채울 일이 생겼는데, 그때마다 전체 화면을 열고 탭을 찾아 날짜를 고르는 건 너무 멀다.
+ * ◀ ▶ 로 날짜를 넘기고, 펼치면 할 일이 빈 근무일을 모아 보여 준다. 접으면 오늘로 돌아온다 —
+ * 지난 날에 멈춰 있는 걸 모르고 오늘 할 일을 거기에 적는 일이 없도록.
  */
-function WidgetTodos({ dateKey }: { dateKey: string }) {
+function WidgetTodos({ activeDate, now }: { activeDate: string; now: number }) {
   const store = useStore();
-  useSnapshot(); // 목록이 바뀌면 다시 그린다
+  const { state } = useSnapshot(); // 목록이 바뀌면 다시 그린다
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('');
+  const [picked, setPicked] = useState<string | null>(null);
+  const dateKey = open && picked ? picked : activeDate;
+  const isToday = dateKey === activeDate;
+
+  // 위젯은 평소 오늘 하루만 읽는다. 펼쳤을 때만 지난달~이번 달을 받아 빈 날을 셀 수 있게 한다
+  // (pullRange 는 같은 기간을 짧은 시간 안에 다시 묻지 않는다).
+  useEffect(() => {
+    if (!open) return;
+    const keys = recentDateKeys(activeDate);
+    void store.pullRange(keys[0]!, keys[keys.length - 1]!);
+  }, [open, activeDate, store]);
+
+  // 두 달보다 앞의 날로 넘어가면 그날 하루를 따로 읽어 온다.
+  useEffect(() => {
+    if (open && picked && !state.logs[picked]) void store.pullDay(picked);
+  }, [open, picked, state.logs, store]);
+
+  const step = (days: number) => {
+    const next = shiftDateKey(dateKey, days);
+    setPicked(next >= activeDate ? null : next);
+  };
 
   const todos = store.todosFor(dateKey);
   const { done, total } = todoSummary(todos);
@@ -206,10 +233,13 @@ function WidgetTodos({ dateKey }: { dateKey: string }) {
         className="widgetTodo__toggle"
         data-testid="widget-todo-toggle"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          setOpen((v) => !v);
+          setPicked(null);
+        }}
       >
         <span aria-hidden="true">📝</span>
-        <span>오늘 할 일</span>
+        <span data-testid="widget-todo-title">{isToday ? '오늘 할 일' : `${formatDateKeyKo(dateKey)} 할 일`}</span>
         <span className="widgetTodo__count">{total === 0 ? '없음' : `${done}/${total}`}</span>
         <span className="header__spacer" />
         <span aria-hidden="true">{open ? '▲' : '▼'}</span>
@@ -217,6 +247,44 @@ function WidgetTodos({ dateKey }: { dateKey: string }) {
 
       {open && (
         <div className="widgetTodo__body">
+          <div className="widgetTodo__nav">
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              data-testid="widget-todo-prev"
+              aria-label="하루 전"
+              onClick={() => step(-1)}
+            >
+              ◀
+            </button>
+            <span className="widgetTodo__day" data-testid="widget-todo-day">
+              {formatDateKeyKo(dateKey)}
+              {isToday ? ' · 오늘' : ''}
+            </span>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              data-testid="widget-todo-next"
+              aria-label="하루 뒤"
+              disabled={isToday}
+              onClick={() => step(1)}
+            >
+              ▶
+            </button>
+            {!isToday && (
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                data-testid="widget-todo-today"
+                onClick={() => setPicked(null)}
+              >
+                오늘로
+              </button>
+            )}
+          </div>
+
+          <EmptyDays compact now={now} selected={dateKey} onPick={(d) => setPicked(d === activeDate ? null : d)} />
+
           {todos.length > 0 && (
             <ul className="widgetTodo__list" data-testid="widget-todo-list">
               {todos.map((todo) => (
